@@ -6,6 +6,11 @@ import { MediaLibrary, MediaItem } from "@/components/media-library";
 import { VideoPlayer } from "@/components/video-player";
 import { StoryOutline, StoryScene } from "@/components/story-outline";
 import { FolderView, FolderItem } from "@/components/folder-view";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 
 // 示例素材数据
 const mockMediaItems: MediaItem[] = [
@@ -241,32 +246,45 @@ export default function VideoEditorPage() {
         </div>
       ) : (
         // 视频编辑页面
-        <>
-          {/* 素材栏 */}
-          <MediaLibrary
-            items={mediaItems}
-            selectedId={selectedMediaId}
-            onSelect={setSelectedMediaId}
-            onUpdateItem={handleUpdateMediaItem}
-            onAddMaterials={handleAddMaterials}
-            onDeleteItem={handleDeleteMediaItem}
-          />
+        <div className="flex-1 min-w-0">
+          <ResizablePanelGroup direction="horizontal">
+            <ResizablePanel defaultSize={24} minSize={18}>
+              <div className="h-full border-r border-border">
+                <MediaLibrary
+                  items={mediaItems}
+                  selectedId={selectedMediaId}
+                  onSelect={setSelectedMediaId}
+                  onUpdateItem={handleUpdateMediaItem}
+                  onAddMaterials={handleAddMaterials}
+                  onDeleteItem={handleDeleteMediaItem}
+                />
+              </div>
+            </ResizablePanel>
 
-          {/* 中间视频播放器 */}
-          <div className="flex-1 min-w-0">
-            <VideoPlayer
-              title={selectedMedia?.title}
-              poster={selectedMedia?.thumbnail}
-            />
-          </div>
+            <ResizableHandle withHandle />
 
-          {/* 右侧剧情大纲 */}
-          <StoryOutline
-            scenes={mockScenes}
-            currentSceneId={currentSceneId}
-            onSceneSelect={setCurrentSceneId}
-          />
-        </>
+            <ResizablePanel defaultSize={52} minSize={30}>
+              <div className="h-full min-w-0">
+                <VideoPlayer
+                  title={selectedMedia?.title}
+                  poster={selectedMedia?.thumbnail}
+                />
+              </div>
+            </ResizablePanel>
+
+            <ResizableHandle withHandle />
+
+            <ResizablePanel defaultSize={24} minSize={18}>
+              <div className="h-full border-l border-border">
+                <StoryOutline
+                  scenes={mockScenes}
+                  currentSceneId={currentSceneId}
+                  onSceneSelect={setCurrentSceneId}
+                />
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
       )}
     </div>
   );

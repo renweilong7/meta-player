@@ -49,7 +49,7 @@ export function StoryOutline({
   };
 
   return (
-    <div className="flex h-full w-80 flex-col border-l border-border bg-card">
+    <div className="flex h-full min-w-0 w-full flex-col bg-card">
       {/* Header */}
       <div className="border-b border-border p-4">
         <h2 className="text-sm font-semibold text-card-foreground">剧情大纲</h2>

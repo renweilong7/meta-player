@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface MediaItem {
   id: string;
@@ -111,7 +112,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
   const activeItem = items.find(i => i.id === activeItemId);
 
   return (
-    <div className="flex h-full w-72 flex-col border-r border-border bg-card">
+    <div className="flex h-full min-w-0 w-full flex-col bg-card">
       {/* Header */}
       <div className="border-b border-border p-4">
         <div className="flex items-center justify-between">
@@ -153,7 +154,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                 }
               }}
               className={cn(
-                "group flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors cursor-pointer",
+                "group grid w-full min-w-0 grid-cols-[96px_minmax(0,1fr)_28px] items-center gap-3 rounded-lg p-2 text-left transition-colors cursor-pointer",
                 selectedId === item.id
                   ? "bg-secondary"
                   : "hover:bg-secondary/50"
@@ -175,10 +176,17 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
               </div>
 
               {/* Info */}
-              <div className="flex-1 min-w-0">
-                <p className="truncate text-sm font-medium text-card-foreground">
-                  {item.title}
-                </p>
+              <div className="min-w-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <p className="truncate text-sm font-medium text-card-foreground">
+                      {item.title}
+                    </p>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" align="start" sideOffset={6} className="max-w-80 break-all">
+                    {item.title}
+                  </TooltipContent>
+                </Tooltip>
                 <p className="text-xs text-muted-foreground">{item.addedAt}</p>
                 {item.synopsis && (
                   <p className="text-xs text-primary mt-0.5 truncate">已有简介</p>
@@ -191,7 +199,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-card-foreground"
+                    className="h-7 w-7 shrink-0 self-start opacity-0 text-muted-foreground hover:text-card-foreground group-hover:opacity-100 group-focus-within:opacity-100"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <MoreVertical className="h-4 w-4" />
