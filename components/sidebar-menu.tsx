@@ -4,10 +4,6 @@ import { cn } from "@/lib/utils";
 import {
   Home,
   Film,
-  FolderOpen,
-  Star,
-  Clock,
-  Download,
   User,
   Settings,
 } from "lucide-react";
@@ -26,10 +22,6 @@ interface SidebarMenuProps {
 const menuItems = [
   { id: "home", icon: Home, label: "首页" },
   { id: "videos", icon: Film, label: "视频" },
-  { id: "folder", icon: FolderOpen, label: "文件夹" },
-  { id: "favorites", icon: Star, label: "收藏" },
-  { id: "recent", icon: Clock, label: "最近" },
-  { id: "downloads", icon: Download, label: "下载" },
 ];
 
 const bottomItems = [

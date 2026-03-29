@@ -1,263 +1,687 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ProjectItem, ProjectView } from "@/components/project-view";
 import { SidebarMenu } from "@/components/sidebar-menu";
 import { MediaLibrary, MediaItem } from "@/components/media-library";
-import { VideoPlayer } from "@/components/video-player";
-import { StoryOutline, StoryScene } from "@/components/story-outline";
-import { FolderView, FolderItem } from "@/components/folder-view";
+import { VideoEditorWorkspace } from "@/components/video-editor-workspace";
+import {
+  AppSettingsValues,
+  SettingsPanel,
+} from "@/components/settings-panel";
+import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
+import { StoryOutline } from "@/components/story-outline";
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import {
+  fetchLibrarySnapshot,
+  importMaterials,
+  patchProject,
+  patchMaterial,
+  patchMaterialMarker,
+  postMaterialMarker,
+  postProject,
+  putSettings,
+  removeMaterial,
+  removeMaterialMarker,
+  removeProject,
+} from "@/lib/persistence/client";
+import { MaterialImportInput } from "@/lib/persistence/types";
+import {
+  generateStoryOutline,
+  mapStoryOutlineToScenes,
+} from "@/lib/story-outline/service";
+import { StoryScene } from "@/lib/story-outline/types";
 
-// 示例素材数据
-const mockMediaItems: MediaItem[] = [
-  {
-    id: "1",
-    title: "开场白 - 主角独白",
-    thumbnail: "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=200&h=120&fit=crop",
-    duration: "02:35",
-    addedAt: "今天 14:30",
-  },
-  {
-    id: "2",
-    title: "城市航拍 - 黄昏场景",
-    thumbnail: "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?w=200&h=120&fit=crop",
-    duration: "01:48",
-    addedAt: "今天 13:15",
-  },
-  {
-    id: "3",
-    title: "对话场景 - 咖啡馆",
-    thumbnail: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=200&h=120&fit=crop",
-    duration: "04:22",
-    addedAt: "昨天 18:45",
-  },
-  {
-    id: "4",
-    title: "追逐戏 - 街道奔跑",
-    thumbnail: "https://images.unsplash.com/photo-1476224203421-9ac39bcb3327?w=200&h=120&fit=crop",
-    duration: "03:15",
-    addedAt: "昨天 16:20",
-  },
-  {
-    id: "5",
-    title: "结尾场景 - 海边日落",
-    thumbnail: "https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=200&h=120&fit=crop",
-    duration: "02:10",
-    addedAt: "3天前",
-  },
-  {
-    id: "6",
-    title: "幕后花絮 - 拍摄现场",
-    thumbnail: "https://images.unsplash.com/photo-1493863641943-9b68992a8d07?w=200&h=120&fit=crop",
-    duration: "05:45",
-    addedAt: "3天前",
-  },
-  {
-    id: "7",
-    title: "配乐测试 - 情感段落",
-    thumbnail: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=200&h=120&fit=crop",
-    duration: "01:30",
-    addedAt: "上周",
-  },
-  {
-    id: "8",
-    title: "特效素材 - 光效叠加",
-    thumbnail: "https://images.unsplash.com/photo-1550684376-efcbd6e3f031?w=200&h=120&fit=crop",
-    duration: "00:45",
-    addedAt: "上周",
-  },
-];
+const defaultSettings: AppSettingsValues = {
+  materialSavePath: "",
+  defaultManagedImport: false,
+  aiApiBaseUrl: "https://api.openai.com/v1",
+  aiApiKey: "",
+  aiModelName: "gpt-4o-mini",
+};
 
-// 示例文件夹数据
-const mockFolderItems: FolderItem[] = [
-  {
-    id: "folder-1",
-    name: "项目A - 城市纪录片",
-    type: "folder",
-    itemCount: 3,
-    updatedAt: "今天 10:30",
-    parentId: null,
-  },
-  {
-    id: "folder-2",
-    name: "项目B - 商业广告",
-    type: "folder",
-    itemCount: 2,
-    updatedAt: "昨天 15:20",
-    parentId: null,
-  },
-  {
-    id: "folder-3",
-    name: "素材库",
-    type: "folder",
-    itemCount: 5,
-    updatedAt: "3天前",
-    parentId: null,
-  },
-  {
-    id: "video-f1",
-    name: "城市航拍素材",
-    type: "video",
-    thumbnail: "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?w=200&h=120&fit=crop",
-    duration: "05:32",
-    updatedAt: "今天 09:15",
-    parentId: "folder-1",
-  },
-  {
-    id: "video-f2",
-    name: "街道采访片段",
-    type: "video",
-    thumbnail: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=200&h=120&fit=crop",
-    duration: "12:45",
-    updatedAt: "今天 08:30",
-    parentId: "folder-1",
-  },
-  {
-    id: "video-f3",
-    name: "夜景延时摄影",
-    type: "video",
-    thumbnail: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?w=200&h=120&fit=crop",
-    duration: "03:18",
-    updatedAt: "昨天 22:00",
-    parentId: "folder-1",
-  },
-  {
-    id: "video-f4",
-    name: "产品展示主视频",
-    type: "video",
-    thumbnail: "https://images.unsplash.com/photo-1485846234645-a62644f84728?w=200&h=120&fit=crop",
-    duration: "01:30",
-    updatedAt: "昨天 14:00",
-    parentId: "folder-2",
-  },
-  {
-    id: "video-f5",
-    name: "幕后花絮",
-    type: "video",
-    thumbnail: "https://images.unsplash.com/photo-1493863641943-9b68992a8d07?w=200&h=120&fit=crop",
-    duration: "08:22",
-    updatedAt: "昨天 11:30",
-    parentId: "folder-2",
-  },
-];
+const LEGACY_PROJECT_STORAGE_KEY = "meta-player-projects";
 
-// 示例剧情大纲数据
-const mockScenes: StoryScene[] = [
-  {
-    id: "s1",
-    title: "序幕：城市黎明",
-    description: "主角在城市天际线的背景下醒来，展示日常生活的一天开始。用广角镜头捕捉城市苏醒的氛围。",
-    duration: "2分钟",
-    timestamp: "00:00",
-    status: "completed",
-  },
-  {
-    id: "s2",
-    title: "第一幕：邂逅",
-    description: "主角在咖啡馆偶遇女主角，两人因为一本书展开对话。场景需要温馨自然的光线。",
-    duration: "5分钟",
-    timestamp: "02:00",
-    status: "completed",
-  },
-  {
-    id: "s3",
-    title: "第二幕：冲突升级",
-    description: "误会产生，主角追赶离去的女主角穿过繁忙的街道。需要动态镜头和紧张的配乐。",
-    duration: "4分钟",
-    timestamp: "07:00",
-    status: "current",
-  },
-  {
-    id: "s4",
-    title: "第三幕：和解",
-    description: "在海边，主角找到女主角，两人坦诚相对。日落作为背景，象征新的开始。",
-    duration: "6分钟",
-    timestamp: "11:00",
-    status: "upcoming",
-  },
-  {
-    id: "s5",
-    title: "尾声：新生活",
-    description: "一年后，两人在同一个咖啡馆，但角色互换。形成首尾呼应，暗示生活的循环与成长。",
-    duration: "3分钟",
-    timestamp: "17:00",
-    status: "upcoming",
-  },
-];
+const loadLegacyProjects = (materials: MediaItem[]) => {
+  if (typeof window === "undefined") {
+    return [] as ProjectItem[];
+  }
+
+  const rawValue = window.localStorage.getItem(LEGACY_PROJECT_STORAGE_KEY);
+  if (!rawValue) {
+    return [] as ProjectItem[];
+  }
+
+  const validMaterialIds = new Set(materials.map((item) => item.id));
+
+  try {
+    const parsed = JSON.parse(rawValue) as ProjectItem[];
+    if (!Array.isArray(parsed)) {
+      return [] as ProjectItem[];
+    }
+
+    return parsed
+      .filter(
+        (item) =>
+          typeof item.id === "string" &&
+          typeof item.name === "string" &&
+          Array.isArray(item.materialIds)
+      )
+      .map((item) => ({
+        ...item,
+        materialIds: item.materialIds.filter((id) => validMaterialIds.has(id)),
+      }));
+  } catch {
+    return [] as ProjectItem[];
+  }
+};
+
+/**
+ * 把服务端返回的素材数组转成当前列表顺序。
+ *
+ * 新素材和被更新的素材都要顶到前面，这样列表排序与数据库的 updated_at 一致，
+ * 用户也能马上看到刚刚编辑过的项。
+ */
+const mergeMaterialIntoList = (previous: MediaItem[], nextItem: MediaItem) => {
+  const withoutCurrent = previous.filter((item) => item.id !== nextItem.id);
+  return [nextItem, ...withoutCurrent];
+};
 
 export default function VideoEditorPage() {
-  const [activeMenu, setActiveMenu] = useState("videos");
-  const [selectedMediaId, setSelectedMediaId] = useState<string | null>("1");
-  const [currentSceneId, setCurrentSceneId] = useState<string | null>("s3");
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>(mockMediaItems);
-  const [folderItems, setFolderItems] = useState<FolderItem[]>(mockFolderItems);
+  const [activeMenu, setActiveMenu] = useState("home");
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
+  const [currentSceneId, setCurrentSceneId] = useState<string | null>(null);
+  const [pendingMarkerTime, setPendingMarkerTime] = useState<number | null>(null);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [settings, setSettings] = useState<AppSettingsValues>(defaultSettings);
+  const [savedSettings, setSavedSettings] = useState<AppSettingsValues>(defaultSettings);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
+  const playerRef = useRef<VideoPlayerHandle>(null);
 
-  const selectedMedia = mediaItems.find((item) => item.id === selectedMediaId);
+  const currentProject = projects.find((item) => item.id === currentProjectId) ?? null;
+  const visibleMediaItems = currentProject
+    ? mediaItems.filter((item) => currentProject.materialIds.includes(item.id))
+    : [];
+  const selectedMedia = visibleMediaItems.find((item) => item.id === selectedMediaId);
+  const selectedStoryScenes: StoryScene[] = mapStoryOutlineToScenes(
+    selectedMedia?.storyOutline ?? []
+  );
+  const selectedMediaHighlight = Object.fromEntries(
+    (selectedMedia?.markers ?? []).map((marker) => [marker.time, marker.content])
+  ) as Record<number, string>;
+  const hasPendingSettingsChanges =
+    JSON.stringify(settings) !== JSON.stringify(savedSettings);
 
-  const handleUpdateMediaItem = (id: string, updates: Partial<MediaItem>) => {
-    setMediaItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
+  /**
+   * 首屏统一加载持久化快照。
+   *
+   * 这里一次性把素材列表和设置拉回来，避免前端在多个接口之间做拼装。
+   */
+  useEffect(() => {
+    let isActive = true;
+
+    const loadSnapshot = async () => {
+      setIsBootstrapping(true);
+      setLibraryError(null);
+
+      try {
+        const snapshot = await fetchLibrarySnapshot();
+        const legacyProjects =
+          snapshot.projects.length === 0 ? loadLegacyProjects(snapshot.materials) : [];
+        const nextProjects =
+          legacyProjects.length === 0
+            ? snapshot.projects
+            : await Promise.all(
+                legacyProjects.map(async (project) => {
+                  const createdProject = await postProject({
+                    name: project.name,
+                    description: project.description,
+                  });
+
+                  if (project.materialIds.length === 0) {
+                    return createdProject;
+                  }
+
+                  return patchProject(createdProject.id, {
+                    materialIds: project.materialIds,
+                  });
+                })
+              );
+
+        if (!isActive) {
+          return;
+        }
+
+        setMediaItems(snapshot.materials);
+        setSettings(snapshot.settings);
+        setSavedSettings(snapshot.settings);
+        setProjects(nextProjects);
+        setCurrentProjectId((current) => current ?? nextProjects[0]?.id ?? null);
+
+        if (legacyProjects.length > 0 && typeof window !== "undefined") {
+          window.localStorage.removeItem(LEGACY_PROJECT_STORAGE_KEY);
+        }
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setLibraryError(
+          error instanceof Error ? error.message : "初始化持久化数据失败。"
+        );
+      } finally {
+        if (isActive) {
+          setIsBootstrapping(false);
+        }
+      }
+    };
+
+    void loadSnapshot();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  /**
+   * 当项目范围内的当前选中素材被删除或切换项目后，自动切到列表第一项。
+   */
+  useEffect(() => {
+    if (visibleMediaItems.length === 0) {
+      setSelectedMediaId(null);
+      return;
+    }
+
+    const stillExists = visibleMediaItems.some((item) => item.id === selectedMediaId);
+    if (!stillExists) {
+      setSelectedMediaId(visibleMediaItems[0].id);
+    }
+  }, [selectedMediaId, visibleMediaItems]);
+
+  const applyLocalMediaPatch = (id: string, updates: Partial<MediaItem>) => {
+    setMediaItems((previous) =>
+      previous.map((item) => (item.id === id ? { ...item, ...updates } : item))
     );
   };
 
-  const handleAddMaterials = (files: File[]) => {
-    const newItems: MediaItem[] = files.map(file => {
-      return {
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-        title: file.name,
-        thumbnail: URL.createObjectURL(file),
-        duration: "00:00",
-        addedAt: "刚刚",
-      };
-    });
-    setMediaItems(prev => [...newItems, ...prev]);
+  const replaceMaterialInState = (item: MediaItem) => {
+    setMediaItems((previous) => mergeMaterialIntoList(previous, item));
   };
 
-  const handleDeleteMediaItem = (id: string) => {
-    setMediaItems(prev => prev.filter(item => item.id !== id));
-    if (selectedMediaId === id) {
-      setSelectedMediaId(null);
+  const handleUpdateMediaItem = async (id: string, updates: Partial<MediaItem>) => {
+    setLibraryError(null);
+
+    try {
+      const updated = await patchMaterial(id, {
+        synopsis: updates.synopsis,
+        srtContent: updates.srtContent,
+        storyOutline: updates.storyOutline,
+        outlineExtractionStatus: updates.outlineExtractionStatus,
+        outlineExtractionError: updates.outlineExtractionError,
+      });
+
+      replaceMaterialInState(updated);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "更新素材失败。"
+      );
+      throw error;
     }
   };
 
-  // 文件夹页面选择视频时切换到视频页
-  const handleFolderVideoSelect = (videoId: string) => {
-    setActiveMenu("videos");
-    // 可以进一步实现跳转到对应视频
+  /**
+   * 导入时把文件直接交给服务端：
+   * - 服务端负责复制到托管目录。
+   * - 服务端负责按内容哈希去重。
+   * - 前端只负责更新当前列表顺序。
+   */
+  const handleAddMaterials = async (files: File[]) => {
+    setLibraryError(null);
+    try {
+      /**
+       * Electron 的 File 对象通常会带上非标准 `path` 字段；
+       * 这里把它透传给后端，让持久化层优先引用原文件，而不是默认复制到托管目录。
+       */
+      const importInputs: MaterialImportInput[] = files.map((file) => {
+        const fileWithPath = file as File & { path?: string };
+
+        return {
+          file,
+          originalPath: fileWithPath.path,
+        };
+      });
+      const importedItems = await importMaterials(importInputs, currentProjectId ?? undefined);
+
+      setMediaItems((previous) =>
+        importedItems.reduce(
+          (accumulator, item) => mergeMaterialIntoList(accumulator, item),
+          previous
+        )
+      );
+
+      if (currentProjectId && importedItems.length > 0) {
+        setProjects((previous) =>
+          previous.map((project) =>
+            project.id === currentProjectId
+              ? {
+                  ...project,
+                  materialIds: [
+                    ...new Set([
+                      ...importedItems.map((item) => item.id),
+                      ...project.materialIds,
+                    ]),
+                  ],
+                }
+              : project
+          )
+        );
+      }
+
+      if (importedItems.length > 0) {
+        setSelectedMediaId(importedItems[0].id);
+      }
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "导入素材失败。"
+      );
+      throw error;
+    }
   };
+
+  const handleDeleteMediaItem = async (id: string) => {
+    setLibraryError(null);
+    try {
+      await removeMaterial(id);
+      setMediaItems((previous) => previous.filter((item) => item.id !== id));
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.materialIds.includes(id)
+            ? {
+                ...project,
+                materialIds: project.materialIds.filter((itemId) => itemId !== id),
+              }
+            : project
+        )
+      );
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "删除素材失败。"
+      );
+      throw error;
+    }
+  };
+
+  const handleCreateProject = async (input: { name: string; description?: string }) => {
+    const nextProject = await postProject(input);
+    setProjects((previous) => [nextProject, ...previous]);
+    setCurrentProjectId(nextProject.id);
+  };
+
+  const handleUpdateProject = (
+    id: string,
+    updates: { name: string; description?: string }
+  ) => {
+    void patchProject(id, updates).then((updatedProject) => {
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+    });
+  };
+
+  const handleDeleteProject = async (id: string) => {
+    await removeProject(id);
+    setProjects((previous) => {
+      const nextProjects = previous.filter((project) => project.id !== id);
+
+      if (currentProjectId === id) {
+        setCurrentProjectId(nextProjects[0]?.id ?? null);
+      }
+
+      if (nextProjects.length === 0) {
+        setActiveMenu("home");
+      }
+
+      return nextProjects;
+    });
+  };
+
+  const handleOpenProject = (projectId: string) => {
+    setCurrentProjectId(projectId);
+    setActiveMenu("videos");
+  };
+
+  const handleSceneSelect = (id: string) => {
+    setCurrentSceneId(id);
+
+    const selectedScene = selectedStoryScenes.find((scene) => scene.id === id);
+    if (!selectedScene) {
+      return;
+    }
+
+    playerRef.current?.seekTo(selectedScene.seekTime);
+  };
+
+  const handleCreateMarker = async (content: string) => {
+    if (!selectedMediaId || pendingMarkerTime === null) {
+      return;
+    }
+
+    if (!Number.isFinite(pendingMarkerTime)) {
+      return;
+    }
+
+    const updated = await postMaterialMarker(selectedMediaId, {
+      time: pendingMarkerTime,
+      content,
+    });
+
+    replaceMaterialInState(updated);
+    setSelectedMediaId(updated.id);
+    setPendingMarkerTime(null);
+  };
+
+  const handleMarkStart = () => {
+    playerRef.current?.pause();
+    setPendingMarkerTime(playerRef.current?.getCurrentTime() ?? 0);
+  };
+
+  const handleMarkEditStart = (time: number) => {
+    playerRef.current?.pause();
+    playerRef.current?.seekTo(time);
+    setPendingMarkerTime(time);
+  };
+
+  const handleAdjustMarkerTime = (nextTime: number) => {
+    setPendingMarkerTime(nextTime);
+    playerRef.current?.seekTo(nextTime);
+  };
+
+  const handleUpdateMarker = async (markerId: string, content: string) => {
+    if (!selectedMediaId || pendingMarkerTime === null) {
+      return;
+    }
+
+    const updated = await patchMaterialMarker(selectedMediaId, markerId, {
+      time: pendingMarkerTime,
+      content,
+    });
+
+    replaceMaterialInState(updated);
+    setSelectedMediaId(updated.id);
+    setPendingMarkerTime(null);
+  };
+
+  const handleDeleteMarker = async (markerId: string) => {
+    if (!selectedMediaId) {
+      return;
+    }
+
+    await removeMaterialMarker(selectedMediaId, markerId);
+    setMediaItems((previous) =>
+      previous.map((item) =>
+        item.id === selectedMediaId
+          ? {
+              ...item,
+              markers: (item.markers ?? []).filter((marker) => marker.id !== markerId),
+            }
+          : item
+      )
+    );
+  };
+
+  /**
+   * 播放器时间轴变化时，反向同步当前剧情大纲项。
+   *
+   * 这里使用场景的时间区间做命中判断：
+   * - 普通场景命中条件为 start <= time < end
+   * - 最后一个场景允许命中到 end，避免播放到素材结尾时丢失选中态
+   */
+  const handlePlayerTimeChange = (time: number) => {
+    if (selectedStoryScenes.length === 0) {
+      return;
+    }
+
+    const matchedScene = selectedStoryScenes.find((scene, index) => {
+      const [startTimecode, endTimecode] = scene.timestamp.split(" - ");
+      const startSeconds = parseTimecodeToSeconds(startTimecode);
+      const endSeconds = parseTimecodeToSeconds(endTimecode);
+      const isLastScene = index === selectedStoryScenes.length - 1;
+
+      if (isLastScene) {
+        return time >= startSeconds && time <= endSeconds;
+      }
+
+      return time >= startSeconds && time < endSeconds;
+    });
+
+    if (matchedScene && matchedScene.id !== currentSceneId) {
+      setCurrentSceneId(matchedScene.id);
+    }
+  };
+
+  const handleSettingsFieldChange = <K extends keyof AppSettingsValues>(
+    field: K,
+    value: AppSettingsValues[K]
+  ) => {
+    setSettings((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const handleSaveSettings = async () => {
+    setIsSavingSettings(true);
+    setLibraryError(null);
+
+    try {
+      const saved = await putSettings(settings);
+      setSettings(saved);
+      setSavedSettings(saved);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "保存设置失败。"
+      );
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const handleBrowseMaterialDirectory = () => {
+    console.log("目录选择接口预留");
+  };
+
+  /**
+   * 统一处理“提取大纲”动作。
+   *
+   * 页面层负责：
+   * - 检查当前素材和设置项是否完整。
+   * - 先把 loading 状态同步到本地和数据库。
+   * - 生成完成后把结构化结果写回 SQLite，保证重启后仍可直接显示。
+   */
+  const handleExtractOutline = async (mediaId: string) => {
+    const targetMedia = mediaItems.find((item) => item.id === mediaId);
+    if (!targetMedia) {
+      return;
+    }
+
+    setSelectedMediaId(mediaId);
+
+    if (!targetMedia.synopsis?.trim()) {
+      applyLocalMediaPatch(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: "请先填写剧情简介，再执行提取。",
+      });
+      await handleUpdateMediaItem(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: "请先填写剧情简介，再执行提取。",
+      });
+      return;
+    }
+
+    if (!targetMedia.srtContent?.trim()) {
+      applyLocalMediaPatch(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: "请先导入或粘贴 SRT 字幕，再执行提取。",
+      });
+      await handleUpdateMediaItem(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: "请先导入或粘贴 SRT 字幕，再执行提取。",
+      });
+      return;
+    }
+
+    if (
+      !settings.aiApiBaseUrl.trim() ||
+      !settings.aiApiKey.trim() ||
+      !settings.aiModelName.trim()
+    ) {
+      const errorMessage =
+        "请先在设置页填写 AI API Base URL、API Key 和模型名称。";
+
+      applyLocalMediaPatch(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: errorMessage,
+      });
+      await handleUpdateMediaItem(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: errorMessage,
+      });
+      setActiveMenu("settings");
+      return;
+    }
+
+    applyLocalMediaPatch(mediaId, {
+      outlineExtractionStatus: "loading",
+      outlineExtractionError: null,
+    });
+
+    await handleUpdateMediaItem(mediaId, {
+      outlineExtractionStatus: "loading",
+      outlineExtractionError: null,
+    });
+
+    try {
+      const outline = await generateStoryOutline(
+        {
+          mediaTitle: targetMedia.title,
+          synopsis: targetMedia.synopsis,
+          srtContent: targetMedia.srtContent,
+        },
+        {
+          baseUrl: settings.aiApiBaseUrl,
+          apiKey: settings.aiApiKey,
+          model: settings.aiModelName,
+        }
+      );
+
+      await handleUpdateMediaItem(mediaId, {
+        storyOutline: outline,
+        outlineExtractionStatus: "success",
+        outlineExtractionError: null,
+      });
+
+      setCurrentSceneId(outline[0]?.id ?? null);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "剧情大纲提取失败";
+
+      applyLocalMediaPatch(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: message,
+      });
+
+      await handleUpdateMediaItem(mediaId, {
+        outlineExtractionStatus: "error",
+        outlineExtractionError: message,
+      });
+    }
+  };
+
+  /**
+   * 当选中素材变化、或该素材的大纲被新的 AI 结果替换时，
+   * 自动把右侧当前场景同步到第一条有效场景，避免出现“当前选中 ID 不存在”的悬空状态。
+   */
+  useEffect(() => {
+    if (selectedStoryScenes.length === 0) {
+      setCurrentSceneId(null);
+      return;
+    }
+
+    const stillExists = selectedStoryScenes.some(
+      (scene) => scene.id === currentSceneId
+    );
+    if (!stillExists) {
+      setCurrentSceneId(selectedStoryScenes[0].id);
+    }
+  }, [currentSceneId, selectedStoryScenes]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
       {/* 最左侧菜单栏 */}
       <SidebarMenu activeMenu={activeMenu} onMenuChange={setActiveMenu} />
 
-      {activeMenu === "folder" ? (
-        // 文件夹页面
+      {activeMenu === "settings" ? (
+        <SettingsPanel
+          values={settings}
+          hasPendingChanges={hasPendingSettingsChanges}
+          isSaving={isSavingSettings}
+          onChangeField={handleSettingsFieldChange}
+          onSave={handleSaveSettings}
+          onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
+        />
+      ) : activeMenu === "home" ? (
         <div className="flex-1 min-w-0">
-          <FolderView
-            items={folderItems}
-            onUpdateItems={setFolderItems}
-            onSelectVideo={handleFolderVideoSelect}
+          <ProjectView
+            items={projects}
+            selectedProjectId={currentProjectId}
+            onCreateProject={handleCreateProject}
+            onUpdateProject={handleUpdateProject}
+            onDeleteProject={handleDeleteProject}
+            onOpenProject={handleOpenProject}
           />
         </div>
+      ) : !currentProject ? (
+        <div className="flex flex-1 items-center justify-center px-6">
+          <div className="rounded-2xl border border-dashed border-border bg-card/50 px-8 py-10 text-center">
+            <p className="text-base font-medium text-foreground">当前未选择项目</p>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              请先到项目页选择一个项目，再进入素材、播放器和剧情大纲工作台。
+            </p>
+          </div>
+        </div>
       ) : (
-        // 视频编辑页面
         <div className="flex-1 min-w-0">
           <ResizablePanelGroup direction="horizontal">
             <ResizablePanel defaultSize={24} minSize={18}>
               <div className="h-full border-r border-border">
                 <MediaLibrary
-                  items={mediaItems}
+                  items={visibleMediaItems}
                   selectedId={selectedMediaId}
+                  projectName={currentProject.name}
                   onSelect={setSelectedMediaId}
                   onUpdateItem={handleUpdateMediaItem}
                   onAddMaterials={handleAddMaterials}
                   onDeleteItem={handleDeleteMediaItem}
+                  onExtractOutline={handleExtractOutline}
                 />
+                {(isBootstrapping || libraryError) && (
+                  <div className="border-t border-border px-4 py-3 text-xs">
+                    {isBootstrapping ? (
+                      <span className="text-muted-foreground">
+                        正在加载持久化素材库...
+                      </span>
+                    ) : (
+                      <span className="text-destructive">{libraryError}</span>
+                    )}
+                  </div>
+                )}
               </div>
             </ResizablePanel>
 
@@ -265,21 +689,49 @@ export default function VideoEditorPage() {
 
             <ResizablePanel defaultSize={52} minSize={30}>
               <div className="h-full min-w-0">
-                <VideoPlayer
-                  title={selectedMedia?.title}
-                  poster={selectedMedia?.thumbnail}
-                />
+                <ResizablePanelGroup direction="vertical">
+                  <ResizablePanel defaultSize={56} minSize={20}>
+                    <VideoPlayer
+                      ref={playerRef}
+                      title={selectedMedia?.title}
+                      src={selectedMedia?.src}
+                      mediaType={selectedMedia?.mediaType}
+                      highlight={selectedMediaHighlight}
+                      onTimeChange={(time) => handlePlayerTimeChange(time)}
+                    />
+                  </ResizablePanel>
+
+                  <ResizableHandle withHandle />
+
+                  <ResizablePanel defaultSize={44} minSize={12}>
+                    <VideoEditorWorkspace
+                      mediaTitle={selectedMedia?.title}
+                      disabled={!selectedMedia}
+                      pendingMarkerTime={pendingMarkerTime}
+                      markers={selectedMedia?.markers ?? []}
+                      onMarkStart={handleMarkStart}
+                      onMarkEditStart={handleMarkEditStart}
+                      onAdjustMarkerTime={handleAdjustMarkerTime}
+                      onSeekToTime={(time) => playerRef.current?.seekTo(time)}
+                      onCreateMarker={handleCreateMarker}
+                      onUpdateMarker={handleUpdateMarker}
+                      onDeleteMarker={handleDeleteMarker}
+                    />
+                  </ResizablePanel>
+                </ResizablePanelGroup>
               </div>
             </ResizablePanel>
 
             <ResizableHandle withHandle />
 
             <ResizablePanel defaultSize={24} minSize={18}>
-              <div className="h-full border-l border-border">
+              <div className="h-full min-h-0 border-l border-border">
                 <StoryOutline
-                  scenes={mockScenes}
+                  scenes={selectedStoryScenes}
                   currentSceneId={currentSceneId}
-                  onSceneSelect={setCurrentSceneId}
+                  isExtracting={selectedMedia?.outlineExtractionStatus === "loading"}
+                  extractionError={selectedMedia?.outlineExtractionError ?? null}
+                  onSceneSelect={handleSceneSelect}
                 />
               </div>
             </ResizablePanel>
@@ -289,3 +741,9 @@ export default function VideoEditorPage() {
     </div>
   );
 }
+
+const parseTimecodeToSeconds = (timecode: string): number => {
+  const [hours, minutes, seconds] = timecode.split(":").map(Number);
+
+  return hours * 3600 + minutes * 60 + seconds;
+};

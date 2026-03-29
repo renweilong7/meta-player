@@ -2,7 +2,17 @@
 
 import { useState, useRef } from "react";
 import { cn } from "@/lib/utils";
-import { Search, Plus, MoreVertical, Play, FileText, FileUp, ListTree, Trash2 } from "lucide-react";
+import {
+  Search,
+  Plus,
+  MoreVertical,
+  Play,
+  FileText,
+  FileUp,
+  ListTree,
+  LoaderCircle,
+  Trash2,
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -22,39 +32,71 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PersistedMaterialMarker } from "@/lib/persistence/types";
+import {
+  OutlineExtractionStatus,
+  StoryOutlineSceneRecord,
+} from "@/lib/story-outline/types";
 
 export interface MediaItem {
   id: string;
   title: string;
   thumbnail: string;
+  src?: string;
   duration: string;
   addedAt: string;
+  mediaType?: "video" | "image";
   synopsis?: string;
   srtContent?: string;
+  storyOutline?: StoryOutlineSceneRecord[];
+  markers?: PersistedMaterialMarker[];
+  outlineExtractionStatus?: OutlineExtractionStatus;
+  outlineExtractionError?: string | null;
 }
 
 interface MediaLibraryProps {
   items: MediaItem[];
   selectedId: string | null;
+  projectName?: string | null;
   onSelect: (id: string) => void;
-  onUpdateItem?: (id: string, updates: Partial<MediaItem>) => void;
-  onAddMaterials?: (files: File[]) => void;
-  onDeleteItem?: (id: string) => void;
+  onUpdateItem?: (id: string, updates: Partial<MediaItem>) => void | Promise<void>;
+  onAddMaterials?: (files: File[]) => void | Promise<void>;
+  onDeleteItem?: (id: string) => void | Promise<void>;
+  onExtractOutline?: (id: string) => void | Promise<void>;
 }
 
 type DialogType = "synopsis" | "srt" | null;
 
-export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddMaterials, onDeleteItem }: MediaLibraryProps) {
+export function MediaLibrary({
+  items,
+  selectedId,
+  projectName = null,
+  onSelect,
+  onUpdateItem,
+  onAddMaterials,
+  onDeleteItem,
+  onExtractOutline,
+}: MediaLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [isSavingDialog, setIsSavingDialog] = useState(false);
+  const [isImportingMaterials, setIsImportingMaterials] = useState(false);
+  const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<string | null>(null);
 
   const handleAddClick = () => {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      onAddMaterials?.(Array.from(e.target.files));
+      setIsImportingMaterials(true);
+      try {
+        await onAddMaterials?.(Array.from(e.target.files));
+      } catch (error) {
+        console.error("导入素材失败:", error);
+      } finally {
+        setIsImportingMaterials(false);
+      }
       e.target.value = '';
     }
   };
@@ -80,22 +122,43 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
 
   const handleExtractOutline = (itemId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // 提取大纲逻辑 - 这里可以调用 AI 接口
-    console.log("提取大纲:", itemId);
+    onExtractOutline?.(itemId);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!activeItemId || !onUpdateItem) return;
-    
-    if (dialogType === "synopsis") {
-      onUpdateItem(activeItemId, { synopsis: synopsisText });
-    } else if (dialogType === "srt") {
-      onUpdateItem(activeItemId, { srtContent: srtText });
+
+    setIsSavingDialog(true);
+
+    try {
+      if (dialogType === "synopsis") {
+        await onUpdateItem(activeItemId, { synopsis: synopsisText });
+      } else if (dialogType === "srt") {
+        await onUpdateItem(activeItemId, { srtContent: srtText });
+      }
+    } catch (error) {
+      console.error("保存素材文本数据失败:", error);
+      return;
+    } finally {
+      setIsSavingDialog(false);
     }
-    
+
     setDialogOpen(false);
     setDialogType(null);
     setActiveItemId(null);
+  };
+
+  const handleDelete = async (itemId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDeletingMaterialId(itemId);
+
+    try {
+      await onDeleteItem?.(itemId);
+    } catch (error) {
+      console.error("删除素材失败:", error);
+    } finally {
+      setIsDeletingMaterialId(null);
+    }
   };
 
   const getDialogTitle = () => {
@@ -116,9 +179,24 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
       {/* Header */}
       <div className="border-b border-border p-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-card-foreground">素材库</h2>
-          <Button onClick={handleAddClick} variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-card-foreground">
-            <Plus className="h-4 w-4" />
+          <div>
+            <h2 className="text-sm font-semibold text-card-foreground">素材库</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {projectName ? `当前项目：${projectName}` : "当前未选择项目"}
+            </p>
+          </div>
+          <Button
+            onClick={handleAddClick}
+            variant="ghost"
+            size="icon"
+            disabled={isImportingMaterials}
+            className="h-8 w-8 text-muted-foreground hover:text-card-foreground"
+          >
+            {isImportingMaterials ? (
+              <LoaderCircle className="h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
           </Button>
           <input
             type="file"
@@ -140,26 +218,42 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
 
       {/* Media List */}
       <ScrollArea className="flex-1">
+        {items.length === 0 ? (
+          <div className="flex h-full min-h-72 flex-col items-center justify-center px-6 text-center">
+            <p className="text-sm font-medium text-foreground">当前项目还没有素材</p>
+            <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
+              点击右上角的加号，把视频或图片导入到当前项目。
+            </p>
+          </div>
+        ) : (
         <div className="p-2">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => onSelect(item.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onSelect(item.id);
-                }
-              }}
-              className={cn(
-                "group grid w-full min-w-0 grid-cols-[96px_minmax(0,1fr)_28px] items-center gap-3 rounded-lg p-2 text-left transition-colors cursor-pointer",
-                selectedId === item.id
-                  ? "bg-secondary"
-                  : "hover:bg-secondary/50"
-              )}
-            >
+          {items.map((item) => {
+            const hasSynopsis = Boolean(item.synopsis?.trim());
+            const hasSrt = Boolean(item.srtContent?.trim());
+            const hasOutline = Boolean(item.storyOutline?.length);
+            const isExtracting = item.outlineExtractionStatus === "loading";
+            const isDeleting = isDeletingMaterialId === item.id;
+            const canExtractOutline = hasSynopsis && hasSrt && !isExtracting && !isDeleting;
+
+            return (
+              <div
+                key={item.id}
+                onClick={() => onSelect(item.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelect(item.id);
+                  }
+                }}
+                className={cn(
+                  "group grid w-full min-w-0 grid-cols-[96px_minmax(0,1fr)_28px] items-center gap-3 rounded-lg p-2 text-left transition-colors cursor-pointer",
+                  selectedId === item.id
+                    ? "bg-secondary"
+                    : "hover:bg-secondary/50"
+                )}
+              >
               {/* Thumbnail */}
               <div className="relative h-14 w-24 flex-shrink-0 overflow-hidden rounded-md bg-muted">
                 <img
@@ -176,7 +270,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
               </div>
 
               {/* Info */}
-              <div className="min-w-0">
+                <div className="min-w-0">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <p className="truncate text-sm font-medium text-card-foreground">
@@ -188,10 +282,31 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                   </TooltipContent>
                 </Tooltip>
                 <p className="text-xs text-muted-foreground">{item.addedAt}</p>
-                {item.synopsis && (
-                  <p className="text-xs text-primary mt-0.5 truncate">已有简介</p>
-                )}
-              </div>
+                  {(hasSynopsis || hasSrt) && (
+                    <div className="mt-1 flex items-center gap-2 text-xs">
+                      {hasSynopsis && (
+                        <span className="truncate text-primary">已有简介</span>
+                      )}
+                      {hasSrt && (
+                        <span className="truncate text-sky-400">已有 SRT</span>
+                      )}
+                      {hasOutline && (
+                        <span className="truncate text-emerald-400">已有大纲</span>
+                      )}
+                    </div>
+                  )}
+                  {isExtracting && (
+                    <div className="mt-1 flex items-center gap-1 text-xs text-primary">
+                      <LoaderCircle className="h-3 w-3 animate-spin" />
+                      提取中
+                    </div>
+                  )}
+                  {!isExtracting && item.outlineExtractionStatus === "error" && (
+                    <p className="mt-1 truncate text-xs text-destructive">
+                      {item.outlineExtractionError || "提取失败"}
+                    </p>
+                  )}
+                </div>
 
               {/* More Button with Dropdown */}
               <DropdownMenu>
@@ -214,19 +329,30 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                     <FileUp className="mr-2 h-4 w-4" />
                     导入 SRT
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={(e) => handleExtractOutline(item.id, e as unknown as React.MouseEvent)}>
+                  <DropdownMenuItem
+                    disabled={!canExtractOutline}
+                    onClick={(e) =>
+                      handleExtractOutline(item.id, e as unknown as React.MouseEvent)
+                    }
+                  >
                     <ListTree className="mr-2 h-4 w-4" />
-                    提取大纲
+                    {isExtracting ? "提取中..." : "提取大纲"}
                   </DropdownMenuItem>
-                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); onDeleteItem?.(item.id); }}>
+                  <DropdownMenuItem
+                    disabled={isDeleting}
+                    className="text-destructive focus:text-destructive"
+                    onClick={(e) => handleDelete(item.id, e as unknown as React.MouseEvent)}
+                  >
                     <Trash2 className="mr-2 h-4 w-4" />
-                    删除素材
+                    {isDeleting ? "删除中..." : "删除素材"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
+        )}
       </ScrollArea>
 
       {/* Footer Stats */}
@@ -268,7 +394,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                 value={synopsisText}
                 onChange={(e) => setSynopsisText(e.target.value)}
                 rows={6}
-                className="resize-none"
+                className="h-48 resize-none overflow-y-auto"
               />
             </div>
           )}
@@ -282,7 +408,7 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
                 value={srtText}
                 onChange={(e) => setSrtText(e.target.value)}
                 rows={8}
-                className="resize-none font-mono text-sm"
+                className="h-64 resize-none overflow-y-auto font-mono text-sm"
               />
               <Button variant="outline" className="w-full">
                 <FileUp className="mr-2 h-4 w-4" />
@@ -292,11 +418,11 @@ export function MediaLibrary({ items, selectedId, onSelect, onUpdateItem, onAddM
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={isSavingDialog}>
               取消
             </Button>
-            <Button onClick={handleSave}>
-              保存
+            <Button onClick={handleSave} disabled={isSavingDialog}>
+              {isSavingDialog ? "保存中..." : "保存"}
             </Button>
           </DialogFooter>
         </DialogContent>

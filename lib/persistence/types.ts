@@ -1,0 +1,108 @@
+import { OutlineExtractionStatus, StoryOutlineSceneRecord } from "@/lib/story-outline/types";
+
+/**
+ * 持久化层的应用设置。
+ *
+ * 这些字段既用于 UI 展示，也用于后端导入流程：
+ * - `materialSavePath` 决定素材托管目录。
+ * - AI 字段决定剧情大纲生成时的远端配置。
+ */
+export interface PersistedAppSettings {
+  materialSavePath: string;
+  defaultManagedImport: boolean;
+  aiApiBaseUrl: string;
+  aiApiKey: string;
+  aiModelName: string;
+}
+
+/**
+ * 数据库存储后的素材实体。
+ *
+ * 说明：
+ * - `contentHash` 是素材身份，不是路径。
+ * - `absolutePath` 指向应用托管后的本地文件。
+ * - `thumbnail` / `src` 都是给 UI 直接消费的派生字段。
+ */
+export interface PersistedMaterial {
+  id: string;
+  title: string;
+  originalFilename: string;
+  absolutePath: string;
+  contentHash: string;
+  storageMode: "managed" | "referenced";
+  mediaType: "video" | "image";
+  fileSize: number;
+  duration: string;
+  addedAt: string;
+  thumbnail: string;
+  src?: string;
+  synopsis?: string;
+  srtContent?: string;
+  storyOutline?: StoryOutlineSceneRecord[];
+  markers?: PersistedMaterialMarker[];
+  outlineExtractionStatus?: OutlineExtractionStatus;
+  outlineExtractionError?: string | null;
+}
+
+export interface PersistedMaterialMarker {
+  id: string;
+  time: number;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersistedProject {
+  id: string;
+  name: string;
+  description?: string;
+  materialIds: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersistedLibrarySnapshot {
+  settings: PersistedAppSettings;
+  materials: PersistedMaterial[];
+  projects: PersistedProject[];
+}
+
+export interface MaterialPatchInput {
+  synopsis?: string;
+  srtContent?: string;
+  storyOutline?: StoryOutlineSceneRecord[];
+  outlineExtractionStatus?: OutlineExtractionStatus;
+  outlineExtractionError?: string | null;
+}
+
+export interface MaterialMarkerCreateInput {
+  time: number;
+  content: string;
+}
+
+export interface MaterialMarkerUpdateInput {
+  time?: number;
+  content?: string;
+}
+
+/**
+ * 前端导入时携带的素材来源信息。
+ *
+ * `originalPath` 仅在 Electron 等桌面环境里可用；
+ * 普通浏览器拿不到稳定绝对路径时，服务端会自动退回托管复制。
+ */
+export interface MaterialImportInput {
+  file: File;
+  originalPath?: string;
+}
+
+export interface ProjectCreateInput {
+  name: string;
+  description?: string;
+}
+
+export interface ProjectUpdateInput {
+  name?: string;
+  description?: string;
+  materialIds?: string[];
+}

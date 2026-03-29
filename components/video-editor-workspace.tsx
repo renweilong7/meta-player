@@ -1,0 +1,345 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Clapperboard, GripHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { PersistedMaterialMarker } from "@/lib/persistence/types";
+
+interface VideoEditorWorkspaceProps {
+  mediaTitle?: string;
+  disabled?: boolean;
+  pendingMarkerTime?: number | null;
+  markers?: PersistedMaterialMarker[];
+  onCreateMarker?: (content: string) => Promise<void>;
+  onUpdateMarker?: (markerId: string, content: string) => Promise<void>;
+  onDeleteMarker?: (markerId: string) => Promise<void>;
+  onMarkStart?: () => void;
+  onMarkEditStart?: (time: number) => void;
+  onAdjustMarkerTime?: (nextTime: number) => void;
+  onSeekToTime?: (time: number) => void;
+}
+
+const formatSeconds = (value: number) => {
+  const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
+  const minutes = Math.floor(safeValue / 60);
+  const seconds = safeValue % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${seconds.toFixed(2).padStart(5, "0")}`;
+};
+
+export function VideoEditorWorkspace({
+  mediaTitle,
+  disabled = false,
+  pendingMarkerTime = null,
+  markers = [],
+  onCreateMarker,
+  onUpdateMarker,
+  onDeleteMarker,
+  onMarkStart,
+  onMarkEditStart,
+  onAdjustMarkerTime,
+  onSeekToTime,
+}: VideoEditorWorkspaceProps) {
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [markerContent, setMarkerContent] = useState("");
+  const [isSavingMarker, setIsSavingMarker] = useState(false);
+  const [editingMarkerId, setEditingMarkerId] = useState<string | null>(null);
+  const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isDialogOpen) {
+      setDialogPosition({ x: 0, y: 0 });
+      setEditingMarkerId(null);
+    }
+  }, [isDialogOpen]);
+
+  const handleOpenCreateDialog = () => {
+    if (disabled) {
+      return;
+    }
+
+    onMarkStart?.();
+    setEditingMarkerId(null);
+    setMarkerContent("");
+    setIsDialogOpen(true);
+  };
+
+  const handleOpenEditDialog = (marker: PersistedMaterialMarker) => {
+    onMarkEditStart?.(marker.time);
+    setEditingMarkerId(marker.id);
+    setMarkerContent(marker.content);
+    setIsDialogOpen(true);
+  };
+
+  const handleSaveMarker = async () => {
+    if (!markerContent.trim()) {
+      return;
+    }
+
+    setIsSavingMarker(true);
+
+    try {
+      if (editingMarkerId) {
+        await onUpdateMarker?.(editingMarkerId, markerContent.trim());
+      } else {
+        await onCreateMarker?.(markerContent.trim());
+      }
+
+      setIsDialogOpen(false);
+      setMarkerContent("");
+    } finally {
+      setIsSavingMarker(false);
+    }
+  };
+
+  const handleAdjustMarkerTime = (delta: number) => {
+    if (pendingMarkerTime === null) {
+      return;
+    }
+
+    onAdjustMarkerTime?.(Math.max(0, pendingMarkerTime + delta));
+  };
+
+  const handleDragStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: dialogPosition.x,
+      originY: dialogPosition.y,
+    };
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const dragState = dragStateRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    setDialogPosition({
+      x: dragState.originX + event.clientX - dragState.startX,
+      y: dragState.originY + event.clientY - dragState.startY,
+    });
+  };
+
+  const handleDragEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragStateRef.current?.pointerId !== event.pointerId) {
+      return;
+    }
+
+    dragStateRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  if (!mediaTitle) {
+    return (
+      <div className="flex h-full items-center justify-center bg-card px-6">
+        <div className="max-w-sm text-center">
+          <Clapperboard className="mx-auto h-10 w-10 text-muted-foreground" />
+          <p className="mt-4 text-sm font-medium text-foreground">请选择一个素材开始编辑</p>
+          <p className="mt-2 text-xs leading-6 text-muted-foreground">
+            当前仅保留布局骨架。后续会在这里接入时间线、片段操作和视频处理能力。
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col border-t border-border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">编辑工作区</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {mediaTitle} · 当前已启用素材级标记能力，后续会继续扩展更多素材级与切片级能力。
+          </p>
+        </div>
+        <Button size="sm" onClick={handleOpenCreateDialog} disabled={disabled}>
+          标记
+        </Button>
+      </div>
+
+      <div className="min-h-0 flex-1 p-4">
+        <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-background/70">
+          <div className="border-b border-border px-4 py-3">
+            <p className="text-sm font-medium text-foreground">标记管理</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              点击列表项跳转到对应时间，编辑与删除都在这里完成。
+            </p>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {markers.length === 0 ? (
+              <div className="flex h-full min-h-32 items-center justify-center rounded-lg border border-dashed border-border px-6 text-center">
+                <div>
+                  <p className="text-sm font-medium text-foreground">还没有标记</p>
+                  <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                    点击右上角“标记”按钮，为当前素材记录关键时间点和说明。
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {markers.map((marker) => (
+                  <div
+                    key={marker.id}
+                    className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-3"
+                  >
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => onSeekToTime?.(marker.time)}
+                    >
+                      <span className="text-xs font-medium text-primary">
+                        {formatSeconds(marker.time)}
+                      </span>
+                      <p className="mt-1 truncate text-sm text-foreground">
+                        {marker.content}
+                      </p>
+                    </button>
+
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => handleOpenEditDialog(marker)}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive"
+                        onClick={() => void onDeleteMarker?.(marker.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent
+          className="top-1/2 left-1/2 sm:max-w-md"
+          style={{
+            transform: `translate(calc(-50% + ${dialogPosition.x}px), calc(-50% + ${dialogPosition.y}px))`,
+          }}
+        >
+          <DialogHeader
+            className="cursor-move select-none pr-8"
+            onPointerDown={handleDragStart}
+            onPointerMove={handleDragMove}
+            onPointerUp={handleDragEnd}
+            onPointerCancel={handleDragEnd}
+          >
+            <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <GripHorizontal className="h-4 w-4" />
+              拖动标题栏移动
+            </div>
+            <DialogTitle>{editingMarkerId ? "编辑标记" : "新增标记"}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <p className="text-xs leading-6 text-muted-foreground">
+              保存后会在当前素材时间轴回显高亮点，并延用现有的点击跳转与悬浮提示逻辑。
+            </p>
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-muted-foreground">标记时间</span>
+                <span className="text-sm font-medium text-foreground">
+                  {pendingMarkerTime === null ? "--:--.--" : formatSeconds(pendingMarkerTime)}
+                </span>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleAdjustMarkerTime(-1)}
+                  disabled={pendingMarkerTime === null}
+                >
+                  -1 秒
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleAdjustMarkerTime(-0.1)}
+                  disabled={pendingMarkerTime === null}
+                >
+                  -0.1 秒
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleAdjustMarkerTime(0.1)}
+                  disabled={pendingMarkerTime === null}
+                >
+                  +0.1 秒
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleAdjustMarkerTime(1)}
+                  disabled={pendingMarkerTime === null}
+                >
+                  +1 秒
+                </Button>
+              </div>
+            </div>
+            <Textarea
+              value={markerContent}
+              onChange={(event) => setMarkerContent(event.target.value)}
+              placeholder="输入标记内容..."
+              rows={5}
+              className="resize-none"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsDialogOpen(false)}
+              disabled={isSavingMarker}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={handleSaveMarker}
+              disabled={isSavingMarker || !markerContent.trim()}
+            >
+              {isSavingMarker ? "保存中..." : editingMarkerId ? "保存修改" : "保存标记"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
