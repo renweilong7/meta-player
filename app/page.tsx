@@ -19,6 +19,7 @@ import {
 import {
   fetchLibrarySnapshot,
   importMaterials,
+  indexMaterialOutline,
   patchProject,
   patchMaterial,
   patchMaterialMarker,
@@ -28,6 +29,7 @@ import {
   removeMaterial,
   removeMaterialMarker,
   removeProject,
+  searchProjectStoryOutline,
 } from "@/lib/persistence/client";
 import { MaterialImportInput } from "@/lib/persistence/types";
 import {
@@ -35,6 +37,7 @@ import {
   mapStoryOutlineToScenes,
 } from "@/lib/story-outline/service";
 import { StoryScene } from "@/lib/story-outline/types";
+import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 const defaultSettings: AppSettingsValues = {
   materialSavePath: "",
@@ -42,6 +45,10 @@ const defaultSettings: AppSettingsValues = {
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
+  storySearchProvider: "remote_embedding",
+  aiEmbeddingModelName: "text-embedding-3-small",
+  localEmbeddingModelName: "bge-small-zh",
+  aiSearchModelName: "gpt-4o-mini",
 };
 
 const LEGACY_PROJECT_STORAGE_KEY = "meta-player-projects";
@@ -104,6 +111,8 @@ export default function VideoEditorPage() {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [pendingOutlineSearchResult, setPendingOutlineSearchResult] =
+    useState<StoryOutlineSearchResult | null>(null);
   const playerRef = useRef<VideoPlayerHandle>(null);
 
   const currentProject = projects.find((item) => item.id === currentProjectId) ?? null;
@@ -371,6 +380,12 @@ export default function VideoEditorPage() {
     playerRef.current?.seekTo(selectedScene.seekTime);
   };
 
+  const handleSelectOutlineSearchResult = (result: StoryOutlineSearchResult) => {
+    setSelectedMediaId(result.assetId);
+    setCurrentSceneId(result.sceneId);
+    setPendingOutlineSearchResult(result);
+  };
+
   const handleCreateMarker = async (content: string) => {
     if (!selectedMediaId || pendingMarkerTime === null) {
       return;
@@ -588,6 +603,16 @@ export default function VideoEditorPage() {
       });
 
       setCurrentSceneId(outline[0]?.id ?? null);
+
+      try {
+        await indexMaterialOutline(mediaId);
+      } catch (indexError) {
+        setLibraryError(
+          indexError instanceof Error
+            ? `剧情大纲已生成，但向量索引失败：${indexError.message}`
+            : "剧情大纲已生成，但向量索引失败。"
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "剧情大纲提取失败";
@@ -602,6 +627,17 @@ export default function VideoEditorPage() {
         outlineExtractionError: message,
       });
     }
+  };
+
+  const handleSearchOutline = async (query: string) => {
+    if (!currentProjectId) {
+      return {
+        mode: "keyword" as const,
+        results: [],
+      };
+    }
+
+    return searchProjectStoryOutline(currentProjectId, query);
   };
 
   /**
@@ -621,6 +657,19 @@ export default function VideoEditorPage() {
       setCurrentSceneId(selectedStoryScenes[0].id);
     }
   }, [currentSceneId, selectedStoryScenes]);
+
+  useEffect(() => {
+    if (!pendingOutlineSearchResult) {
+      return;
+    }
+
+    if (selectedMedia?.id !== pendingOutlineSearchResult.assetId) {
+      return;
+    }
+
+    playerRef.current?.seekTo(pendingOutlineSearchResult.startSeconds);
+    setPendingOutlineSearchResult(null);
+  }, [pendingOutlineSearchResult, selectedMedia?.id]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
@@ -670,6 +719,8 @@ export default function VideoEditorPage() {
                   onAddMaterials={handleAddMaterials}
                   onDeleteItem={handleDeleteMediaItem}
                   onExtractOutline={handleExtractOutline}
+                  onSelectOutlineSearchResult={handleSelectOutlineSearchResult}
+                  onSearchOutline={handleSearchOutline}
                 />
                 {(isBootstrapping || libraryError) && (
                   <div className="border-t border-border px-4 py-3 text-xs">

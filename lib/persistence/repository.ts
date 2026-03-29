@@ -15,6 +15,7 @@ import {
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
 import { StoryOutlineSceneRecord } from "@/lib/story-outline/types";
+import { StoryOutlineSearchSegment } from "@/lib/story-outline/search";
 
 const SETTINGS_DEFAULTS: PersistedAppSettings = {
   materialSavePath: getDefaultMaterialDirectory(),
@@ -22,6 +23,10 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
+  storySearchProvider: "remote_embedding",
+  aiEmbeddingModelName: "text-embedding-3-small",
+  localEmbeddingModelName: "bge-small-zh",
+  aiSearchModelName: "gpt-4o-mini",
 };
 
 const OUTLINE_PROMPT_VERSION = "v1";
@@ -55,6 +60,24 @@ type ProjectRow = {
   created_at: string;
   updated_at: string;
   material_ids_json: string;
+};
+
+type OutlineSegmentRow = {
+  id: string;
+  asset_id: string;
+  asset_title: string;
+  scene_id: string;
+  scene_title: string;
+  scene_description: string;
+  start_seconds: number;
+  end_seconds: number;
+  timestamp_text: string;
+  searchable_text: string;
+  embedding_json: string | null;
+  embedding_model: string | null;
+  embedding_status: "idle" | "loading" | "success" | "error";
+  embedding_error: string | null;
+  updated_at: string;
 };
 
 /**
@@ -133,6 +156,23 @@ const parseMarkerJson = (raw: string | null): PersistedMaterialMarker[] | undefi
   }
 };
 
+const parseEmbeddingJson = (raw: string | null): number[] | undefined => {
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as number[];
+    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "number")) {
+      return undefined;
+    }
+
+    return parsed;
+  } catch {
+    return undefined;
+  }
+};
+
 const getMaterialFileUrl = (id: string) => `/api/materials/${id}/file`;
 
 const mapRowToMaterial = (row: AssetRow): PersistedMaterial => ({
@@ -172,6 +212,22 @@ const mapRowToProject = (row: ProjectRow): PersistedProject => ({
   materialIds: parseProjectMaterialIds(row.material_ids_json),
   createdAt: formatAddedAt(row.created_at),
   updatedAt: formatAddedAt(row.updated_at),
+});
+
+const mapRowToOutlineSegment = (
+  row: OutlineSegmentRow
+): StoryOutlineSearchSegment => ({
+  id: row.id,
+  assetId: row.asset_id,
+  assetTitle: row.asset_title,
+  sceneId: row.scene_id,
+  sceneTitle: row.scene_title,
+  sceneDescription: row.scene_description,
+  startSeconds: row.start_seconds,
+  endSeconds: row.end_seconds,
+  timestamp: row.timestamp_text,
+  searchableText: row.searchable_text,
+  embedding: parseEmbeddingJson(row.embedding_json),
 });
 
 const ensureDirectory = (directory: string) => {
@@ -249,6 +305,15 @@ export const getSettings = (): PersistedAppSettings => {
     aiApiBaseUrl: stored.get("aiApiBaseUrl") ?? SETTINGS_DEFAULTS.aiApiBaseUrl,
     aiApiKey: stored.get("aiApiKey") ?? SETTINGS_DEFAULTS.aiApiKey,
     aiModelName: stored.get("aiModelName") ?? SETTINGS_DEFAULTS.aiModelName,
+    storySearchProvider:
+      (stored.get("storySearchProvider") as PersistedAppSettings["storySearchProvider"]) ??
+      SETTINGS_DEFAULTS.storySearchProvider,
+    aiEmbeddingModelName:
+      stored.get("aiEmbeddingModelName") ?? SETTINGS_DEFAULTS.aiEmbeddingModelName,
+    localEmbeddingModelName:
+      stored.get("localEmbeddingModelName") ?? SETTINGS_DEFAULTS.localEmbeddingModelName,
+    aiSearchModelName:
+      stored.get("aiSearchModelName") ?? SETTINGS_DEFAULTS.aiSearchModelName,
   };
 };
 
@@ -273,6 +338,10 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     statement.run("aiApiBaseUrl", settings.aiApiBaseUrl, now);
     statement.run("aiApiKey", settings.aiApiKey, now);
     statement.run("aiModelName", settings.aiModelName, now);
+    statement.run("storySearchProvider", settings.storySearchProvider, now);
+    statement.run("aiEmbeddingModelName", settings.aiEmbeddingModelName, now);
+    statement.run("localEmbeddingModelName", settings.localEmbeddingModelName, now);
+    statement.run("aiSearchModelName", settings.aiSearchModelName, now);
   });
 
   ensureDirectory(settings.materialSavePath);
@@ -378,6 +447,57 @@ const getProjectRowById = (id: string) => {
 
 export const listProjects = (): PersistedProject[] => listProjectRows().map(mapRowToProject);
 
+export const listMaterialsByProjectId = (projectId: string): PersistedMaterial[] => {
+  const database = getDatabase();
+  const rows = database
+    .prepare(`
+      SELECT
+        a.id,
+        a.title,
+        a.original_filename,
+        a.stored_filename,
+        a.absolute_path,
+        a.content_hash,
+        a.storage_mode,
+        a.file_size,
+        a.media_type,
+        a.duration,
+        a.created_at,
+        a.updated_at,
+        t.synopsis,
+        t.srt_content,
+        o.outline_json,
+        o.status AS outline_status,
+        o.error_message AS outline_error,
+        (
+          SELECT json_group_array(
+            json_object(
+              'id', m.id,
+              'time', m.marker_time,
+              'content', m.content,
+              'createdAt', m.created_at,
+              'updatedAt', m.updated_at
+            )
+          )
+          FROM (
+            SELECT *
+            FROM asset_marker
+            WHERE asset_id = a.id
+            ORDER BY marker_time ASC, created_at ASC
+          ) m
+        ) AS markers_json
+      FROM asset a
+      INNER JOIN project_asset pa ON pa.asset_id = a.id
+      LEFT JOIN asset_text_data t ON t.asset_id = a.id
+      LEFT JOIN asset_outline o ON o.asset_id = a.id
+      WHERE pa.project_id = ?
+      ORDER BY a.updated_at DESC, a.created_at DESC
+    `)
+    .all(projectId) as AssetRow[];
+
+  return rows.map(mapRowToMaterial);
+};
+
 const ensureDefaultProjectForExistingMaterials = () => {
   const materials = listMaterials();
   const projects = listProjects();
@@ -456,6 +576,11 @@ const getAssetById = (id: string) => {
       WHERE a.id = ?
     `)
     .get(id) as AssetRow | undefined;
+};
+
+export const getMaterialById = (id: string): PersistedMaterial | null => {
+  const row = getAssetById(id);
+  return row ? mapRowToMaterial(row) : null;
 };
 
 const getAssetByContentHash = (contentHash: string) => {
@@ -685,6 +810,102 @@ export const updateMaterial = (id: string, patch: MaterialPatchInput) => {
   }
 
   return mapRowToMaterial(updated);
+};
+
+export const replaceOutlineSegmentsForAsset = (
+  assetId: string,
+  segments: Array<
+    Omit<StoryOutlineSearchSegment, "assetTitle"> & {
+      assetTitle: string;
+      embedding?: number[];
+      embeddingModel?: string | null;
+      embeddingStatus?: "idle" | "loading" | "success" | "error";
+      embeddingError?: string | null;
+    }
+  >
+) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+
+  runInTransaction(() => {
+    database
+      .prepare("DELETE FROM asset_outline_segment WHERE asset_id = ?")
+      .run(assetId);
+
+    const insertStatement = database.prepare(`
+      INSERT INTO asset_outline_segment (
+        id,
+        asset_id,
+        scene_id,
+        scene_title,
+        scene_description,
+        start_seconds,
+        end_seconds,
+        timestamp_text,
+        searchable_text,
+        embedding_json,
+        embedding_model,
+        embedding_status,
+        embedding_error,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const segment of segments) {
+      insertStatement.run(
+        segment.id,
+        assetId,
+        segment.sceneId,
+        segment.sceneTitle,
+        segment.sceneDescription,
+        segment.startSeconds,
+        segment.endSeconds,
+        segment.timestamp,
+        segment.searchableText,
+        segment.embedding ? JSON.stringify(segment.embedding) : null,
+        segment.embeddingModel ?? null,
+        segment.embeddingStatus ?? "idle",
+        segment.embeddingError ?? null,
+        now
+      );
+    }
+
+    database.prepare("UPDATE asset SET updated_at = ? WHERE id = ?").run(now, assetId);
+  });
+};
+
+export const listOutlineSegmentsByProjectId = (
+  projectId: string
+): StoryOutlineSearchSegment[] => {
+  const database = getDatabase();
+
+  const rows = database
+    .prepare(`
+      SELECT
+        s.id,
+        s.asset_id,
+        a.title AS asset_title,
+        s.scene_id,
+        s.scene_title,
+        s.scene_description,
+        s.start_seconds,
+        s.end_seconds,
+        s.timestamp_text,
+        s.searchable_text,
+        s.embedding_json,
+        s.embedding_model,
+        s.embedding_status,
+        s.embedding_error,
+        s.updated_at
+      FROM asset_outline_segment s
+      INNER JOIN asset a ON a.id = s.asset_id
+      INNER JOIN project_asset pa ON pa.asset_id = s.asset_id
+      WHERE pa.project_id = ?
+      ORDER BY a.updated_at DESC, s.start_seconds ASC
+    `)
+    .all(projectId) as OutlineSegmentRow[];
+
+  return rows.map(mapRowToOutlineSegment);
 };
 
 export const updateMaterialMarker = (

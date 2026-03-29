@@ -1,5 +1,10 @@
 import { OutlineExtractionStatus, StoryOutlineSceneRecord } from "@/lib/story-outline/types";
 
+export type StorySearchProvider =
+  | "remote_embedding"
+  | "local_embedding"
+  | "llm";
+
 /**
  * 持久化层的应用设置。
  *
@@ -13,6 +18,10 @@ export interface PersistedAppSettings {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;
+  storySearchProvider: StorySearchProvider;
+  aiEmbeddingModelName: string;
+  localEmbeddingModelName: string;
+  aiSearchModelName: string;
 }
 
 /**

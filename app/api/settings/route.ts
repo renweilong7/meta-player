@@ -18,6 +18,10 @@ export async function PUT(request: Request) {
       aiApiBaseUrl: body.aiApiBaseUrl,
       aiApiKey: body.aiApiKey,
       aiModelName: body.aiModelName,
+      storySearchProvider: body.storySearchProvider,
+      aiEmbeddingModelName: body.aiEmbeddingModelName,
+      localEmbeddingModelName: body.localEmbeddingModelName,
+      aiSearchModelName: body.aiSearchModelName,
     })
   );
 }

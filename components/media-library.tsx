@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   Search,
@@ -31,12 +31,18 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { PersistedMaterialMarker } from "@/lib/persistence/types";
 import {
   OutlineExtractionStatus,
   StoryOutlineSceneRecord,
 } from "@/lib/story-outline/types";
+import {
+  buildStoryOutlineSearchSegments,
+  StoryOutlineSearchResult,
+} from "@/lib/story-outline/search";
 
 export interface MediaItem {
   id: string;
@@ -63,9 +69,15 @@ interface MediaLibraryProps {
   onAddMaterials?: (files: File[]) => void | Promise<void>;
   onDeleteItem?: (id: string) => void | Promise<void>;
   onExtractOutline?: (id: string) => void | Promise<void>;
+  onSelectOutlineSearchResult?: (result: StoryOutlineSearchResult) => void;
+  onSearchOutline?: (query: string) => Promise<{
+    mode: "embedding" | "keyword" | "llm";
+    results: StoryOutlineSearchResult[];
+  }>;
 }
 
 type DialogType = "synopsis" | "srt" | null;
+type SearchMode = "materials" | "outline";
 
 export function MediaLibrary({
   items,
@@ -76,6 +88,8 @@ export function MediaLibrary({
   onAddMaterials,
   onDeleteItem,
   onExtractOutline,
+  onSelectOutlineSearchResult,
+  onSearchOutline,
 }: MediaLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -104,6 +118,91 @@ export function MediaLibrary({
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [synopsisText, setSynopsisText] = useState("");
   const [srtText, setSrtText] = useState("");
+  const [searchMode, setSearchMode] = useState<SearchMode>("materials");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [submittedSearchQuery, setSubmittedSearchQuery] = useState("");
+  const [outlineSearchResults, setOutlineSearchResults] = useState<
+    StoryOutlineSearchResult[]
+  >([]);
+  const [outlineSearchState, setOutlineSearchState] = useState<
+    "idle" | "loading" | "embedding" | "keyword" | "llm"
+  >("idle");
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const normalizedSubmittedQuery = submittedSearchQuery.trim().toLowerCase();
+  const outlineSegments = useMemo(
+    () =>
+      buildStoryOutlineSearchSegments(
+        items.map((item) => ({
+          id: item.id,
+          title: item.title,
+          synopsis: item.synopsis,
+          storyOutline: item.storyOutline,
+        }))
+      ),
+    [items]
+  );
+  const filteredItems = useMemo(() => {
+    if (!normalizedQuery || searchMode !== "materials") {
+      return items;
+    }
+
+    return items.filter((item) =>
+      [item.title, item.synopsis ?? ""].some((value) =>
+        value.toLowerCase().includes(normalizedQuery)
+      )
+    );
+  }, [items, normalizedQuery, searchMode]);
+
+  const handleSubmitSearch = () => {
+    setSubmittedSearchQuery(searchQuery.trim());
+  };
+
+  useEffect(() => {
+    if (searchMode !== "outline") {
+      setOutlineSearchResults([]);
+      setOutlineSearchState("idle");
+      return;
+    }
+
+    if (!normalizedSubmittedQuery) {
+      setOutlineSearchResults([]);
+      setOutlineSearchState("idle");
+      return;
+    }
+
+    if (!onSearchOutline) {
+      setOutlineSearchResults([]);
+      setOutlineSearchState("idle");
+      return;
+    }
+
+    let isActive = true;
+    setOutlineSearchState("loading");
+
+    void onSearchOutline(submittedSearchQuery)
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+
+        setOutlineSearchResults(response.results);
+        setOutlineSearchState(response.mode);
+      })
+      .catch((error) => {
+        console.error("剧情搜索失败:", error);
+        if (!isActive) {
+          return;
+        }
+
+        setOutlineSearchResults([]);
+        setOutlineSearchState("keyword");
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [normalizedSubmittedQuery, onSearchOutline, searchMode, submittedSearchQuery]);
 
   const handleOpenDialog = (type: DialogType, itemId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -173,9 +272,17 @@ export function MediaLibrary({
   };
 
   const activeItem = items.find(i => i.id === activeItemId);
+  const outlineSearchStatusLabel =
+    outlineSearchState === "embedding"
+      ? "语义检索"
+      : outlineSearchState === "llm"
+        ? "大模型搜索"
+        : outlineSearchState === "loading"
+          ? "搜索中"
+          : "关键词检索";
 
   return (
-    <div className="flex h-full min-w-0 w-full flex-col bg-card">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-col bg-card">
       {/* Header */}
       <div className="border-b border-border p-4">
         <div className="flex items-center justify-between">
@@ -207,17 +314,63 @@ export function MediaLibrary({
             onChange={handleFileChange}
           />
         </div>
-        <div className="mt-3 relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="搜索素材..."
-            className="h-9 pl-9 bg-input border-border text-foreground placeholder:text-muted-foreground"
-          />
+        <ToggleGroup
+          type="single"
+          value={searchMode}
+          onValueChange={(value) => {
+            if (value === "materials" || value === "outline") {
+              setSearchMode(value);
+            }
+          }}
+          variant="outline"
+          size="sm"
+          className="mt-3 grid w-full grid-cols-2"
+        >
+          <ToggleGroupItem value="materials" aria-label="搜索素材">
+            素材
+          </ToggleGroupItem>
+          <ToggleGroupItem value="outline" aria-label="搜索剧情">
+            剧情
+          </ToggleGroupItem>
+        </ToggleGroup>
+        <div className="mt-3 flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleSubmitSearch();
+                }
+              }}
+              placeholder={
+                searchMode === "materials" ? "搜索素材..." : "搜索当前项目中的剧情片段..."
+              }
+              className="h-9 pl-9 bg-input border-border text-foreground placeholder:text-muted-foreground"
+            />
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={handleSubmitSearch}
+            disabled={searchMode === "outline" && !normalizedQuery}
+            className="h-9 shrink-0"
+          >
+            搜索
+          </Button>
         </div>
+        {searchMode === "outline" && normalizedSubmittedQuery && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            当前搜索方式：{outlineSearchStatusLabel}
+          </p>
+        )}
       </div>
 
       {/* Media List */}
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-h-0 flex-1">
         {items.length === 0 ? (
           <div className="flex h-full min-h-72 flex-col items-center justify-center px-6 text-center">
             <p className="text-sm font-medium text-foreground">当前项目还没有素材</p>
@@ -225,9 +378,74 @@ export function MediaLibrary({
               点击右上角的加号，把视频或图片导入到当前项目。
             </p>
           </div>
+        ) : searchMode === "outline" ? (
+          <div className="p-2">
+            {!normalizedQuery ? (
+              <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+                <p className="text-sm font-medium text-foreground">搜索当前项目中的剧情片段</p>
+                <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
+                  会在当前项目全部素材的大纲场景中查找标题和描述最匹配的片段。
+                </p>
+              </div>
+            ) : outlineSearchState === "loading" ? (
+              <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+                <LoaderCircle className="h-6 w-6 animate-spin text-primary" />
+                <p className="mt-3 text-sm font-medium text-foreground">正在搜索剧情片段</p>
+              </div>
+            ) : outlineSearchResults.length === 0 ? (
+              <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+                <p className="text-sm font-medium text-foreground">没有匹配的剧情片段</p>
+                <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
+                  试试更短的关键词，或者先为素材提取剧情大纲。
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="mb-2 flex items-center justify-between px-1 text-xs text-muted-foreground">
+                  <span>当前使用{outlineSearchStatusLabel}</span>
+                  <span>{outlineSearchResults.length} 条结果</span>
+                </div>
+                {outlineSearchResults.map((result) => (
+                  <button
+                    key={`${result.assetId}:${result.sceneId}`}
+                    type="button"
+                    onClick={() => onSelectOutlineSearchResult?.(result)}
+                    className="mb-2 w-full rounded-lg border border-border bg-background p-3 text-left transition-colors hover:bg-secondary/50"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-card-foreground">
+                          {result.sceneTitle}
+                        </p>
+                        <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
+                          {result.sceneDescription}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="shrink-0">
+                        {outlineSearchState === "embedding" || outlineSearchState === "llm"
+                          ? result.score.toFixed(3)
+                          : result.score}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                      <span className="truncate">{result.assetTitle}</span>
+                      <span className="shrink-0">{result.timestamp}</span>
+                    </div>
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
         ) : (
         <div className="p-2">
-          {items.map((item) => {
+          {filteredItems.length === 0 ? (
+            <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+              <p className="text-sm font-medium text-foreground">没有匹配的素材</p>
+              <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
+                试试修改关键词，或者切到“剧情”模式按大纲场景搜索。
+              </p>
+            </div>
+          ) : filteredItems.map((item) => {
             const hasSynopsis = Boolean(item.synopsis?.trim());
             const hasSrt = Boolean(item.srtContent?.trim());
             const hasOutline = Boolean(item.storyOutline?.length);
@@ -358,7 +576,9 @@ export function MediaLibrary({
       {/* Footer Stats */}
       <div className="border-t border-border p-3">
         <p className="text-xs text-muted-foreground">
-          共 {items.length} 个素材
+          {searchMode === "materials"
+            ? `共 ${filteredItems.length} / ${items.length} 个素材`
+            : `共 ${outlineSegments.length} 个剧情片段`}
         </p>
       </div>
 

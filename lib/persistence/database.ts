@@ -66,6 +66,26 @@ const initializeSchema = (database: DatabaseSync) => {
       FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS asset_outline_segment (
+      id TEXT PRIMARY KEY,
+      asset_id TEXT NOT NULL,
+      scene_id TEXT NOT NULL,
+      scene_title TEXT NOT NULL,
+      scene_description TEXT NOT NULL,
+      start_seconds INTEGER NOT NULL,
+      end_seconds INTEGER NOT NULL,
+      timestamp_text TEXT NOT NULL,
+      searchable_text TEXT NOT NULL,
+      embedding_json TEXT,
+      embedding_model TEXT,
+      embedding_status TEXT NOT NULL DEFAULT 'idle' CHECK (
+        embedding_status IN ('idle', 'loading', 'success', 'error')
+      ),
+      embedding_error TEXT,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS asset_marker (
       id TEXT PRIMARY KEY,
       asset_id TEXT NOT NULL,
@@ -101,6 +121,7 @@ const initializeSchema = (database: DatabaseSync) => {
 
     CREATE INDEX IF NOT EXISTS idx_asset_updated_at ON asset(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_asset_marker_asset_time ON asset_marker(asset_id, marker_time ASC);
+    CREATE INDEX IF NOT EXISTS idx_asset_outline_segment_asset_id ON asset_outline_segment(asset_id);
     CREATE INDEX IF NOT EXISTS idx_project_updated_at ON project(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_project_asset_asset_id ON project_asset(asset_id);
   `);

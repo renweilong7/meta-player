@@ -28,6 +28,8 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { StorySearchProvider } from "@/lib/persistence/types";
 
 export interface AppSettingsValues {
   materialSavePath: string;
@@ -35,6 +37,10 @@ export interface AppSettingsValues {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;
+  storySearchProvider: StorySearchProvider;
+  aiEmbeddingModelName: string;
+  localEmbeddingModelName: string;
+  aiSearchModelName: string;
 }
 
 interface SettingsPanelProps {
@@ -58,6 +64,17 @@ export function SettingsPanel({
   onBrowseMaterialDirectory,
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const normalizedValues: AppSettingsValues = {
+    materialSavePath: values.materialSavePath ?? "",
+    defaultManagedImport: values.defaultManagedImport ?? false,
+    aiApiBaseUrl: values.aiApiBaseUrl ?? "",
+    aiApiKey: values.aiApiKey ?? "",
+    aiModelName: values.aiModelName ?? "",
+    storySearchProvider: values.storySearchProvider ?? "remote_embedding",
+    aiEmbeddingModelName: values.aiEmbeddingModelName ?? "",
+    localEmbeddingModelName: values.localEmbeddingModelName ?? "",
+    aiSearchModelName: values.aiSearchModelName ?? "",
+  };
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
@@ -102,7 +119,7 @@ export function SettingsPanel({
                     <div className="flex flex-col gap-3 md:flex-row">
                       <Input
                         id="material-save-path"
-                        value={values.materialSavePath}
+                        value={normalizedValues.materialSavePath}
                         onChange={(event) =>
                           onChangeField("materialSavePath", event.target.value)
                         }
@@ -141,7 +158,7 @@ export function SettingsPanel({
                       </div>
                       <Switch
                         id="default-managed-import"
-                        checked={values.defaultManagedImport}
+                        checked={normalizedValues.defaultManagedImport}
                         onCheckedChange={(checked) =>
                           onChangeField("defaultManagedImport", checked)
                         }
@@ -177,7 +194,7 @@ export function SettingsPanel({
                       <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         id="ai-api-base-url"
-                        value={values.aiApiBaseUrl}
+                        value={normalizedValues.aiApiBaseUrl}
                         onChange={(event) =>
                           onChangeField("aiApiBaseUrl", event.target.value)
                         }
@@ -192,13 +209,37 @@ export function SettingsPanel({
                 </Field>
 
                 <Field>
+                  <FieldLabel htmlFor="story-search-provider">剧情搜索方案</FieldLabel>
+                  <FieldContent>
+                    <Select
+                      value={normalizedValues.storySearchProvider}
+                      onValueChange={(value) =>
+                        onChangeField("storySearchProvider", value as StorySearchProvider)
+                      }
+                    >
+                      <SelectTrigger id="story-search-provider" className="h-10 w-full">
+                        <SelectValue placeholder="选择剧情搜索方案" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
+                        <SelectItem value="local_embedding">本地 Embedding 模型</SelectItem>
+                        <SelectItem value="llm">直接大模型搜索</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      当前已实现远端 Embedding API 和直接大模型搜索；本地模型仍为配置预留。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
                   <FieldLabel htmlFor="ai-model-name">AI 模型名称</FieldLabel>
                   <FieldContent>
                     <div className="relative">
                       <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                       <Input
                         id="ai-model-name"
-                        value={values.aiModelName}
+                        value={normalizedValues.aiModelName}
                         onChange={(event) =>
                           onChangeField("aiModelName", event.target.value)
                         }
@@ -213,6 +254,75 @@ export function SettingsPanel({
                 </Field>
 
                 <Field>
+                  <FieldLabel htmlFor="ai-embedding-model-name">
+                    Embedding 模型名称
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="relative">
+                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        id="ai-embedding-model-name"
+                        value={normalizedValues.aiEmbeddingModelName}
+                        onChange={(event) =>
+                          onChangeField("aiEmbeddingModelName", event.target.value)
+                        }
+                        placeholder="text-embedding-3-small"
+                        className="h-10 pl-9"
+                      />
+                    </div>
+                    <FieldDescription>
+                      指定用于剧情片段语义检索的 embedding 模型名称，和大纲生成模型分开配置。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="local-embedding-model-name">
+                    本地 Embedding 模型名称
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="relative">
+                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        id="local-embedding-model-name"
+                        value={normalizedValues.localEmbeddingModelName}
+                        onChange={(event) =>
+                          onChangeField("localEmbeddingModelName", event.target.value)
+                        }
+                        placeholder="bge-small-zh"
+                        className="h-10 pl-9"
+                      />
+                    </div>
+                    <FieldDescription>
+                      预留本地向量模型名称；当前版本尚未接入本地推理。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="ai-search-model-name">
+                    大模型搜索模型名称
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="relative">
+                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        id="ai-search-model-name"
+                        value={normalizedValues.aiSearchModelName}
+                        onChange={(event) =>
+                          onChangeField("aiSearchModelName", event.target.value)
+                        }
+                        placeholder="gpt-4o-mini"
+                        className="h-10 pl-9"
+                      />
+                    </div>
+                    <FieldDescription>
+                      指定直接调用大模型执行剧情搜索时使用的模型名称。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
                   <FieldLabel htmlFor="ai-api-key">AI API Key</FieldLabel>
                   <FieldContent>
                     <div className="flex gap-3">
@@ -220,7 +330,7 @@ export function SettingsPanel({
                         <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           id="ai-api-key"
-                          value={values.aiApiKey}
+                          value={normalizedValues.aiApiKey}
                           onChange={(event) =>
                             onChangeField("aiApiKey", event.target.value)
                           }

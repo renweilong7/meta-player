@@ -12,6 +12,7 @@ import {
   ProjectCreateInput,
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
+import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 const assertOk = async (response: Response) => {
   if (response.ok) {
@@ -194,4 +195,47 @@ export const removeProject = async (id: string) => {
       method: "DELETE",
     })
   );
+};
+
+export const indexMaterialOutline = async (
+  id: string
+): Promise<{ indexedCount: number; mode: "embedding" | "keyword_only" | "empty" }> => {
+  const response = await assertOk(
+    await fetch(`/api/materials/${id}/outline-index`, {
+      method: "POST",
+    })
+  );
+
+  return (await response.json()) as {
+    indexedCount: number;
+    mode: "embedding" | "keyword_only" | "empty";
+  };
+};
+
+export const searchProjectStoryOutline = async (
+  projectId: string,
+  query: string,
+  limit = 20
+): Promise<{
+  mode: "embedding" | "keyword" | "llm";
+  results: StoryOutlineSearchResult[];
+}> => {
+  const response = await assertOk(
+    await fetch("/api/story-outline/search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId,
+        query,
+        limit,
+      }),
+    })
+  );
+
+  return (await response.json()) as {
+    mode: "embedding" | "keyword" | "llm";
+    results: StoryOutlineSearchResult[];
+  };
 };
