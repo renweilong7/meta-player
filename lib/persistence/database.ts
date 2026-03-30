@@ -9,7 +9,8 @@ import { DatabaseSync } from "node:sqlite";
  * 1. 当前开发环境对工作区写入最稳定。
  * 2. Electron/Next 本地开发时不依赖额外系统目录权限。
  */
-const APP_DATA_DIRECTORY = join(process.cwd(), ".meta-player");
+const APP_DATA_DIRECTORY =
+  process.env.META_PLAYER_DATA_DIR?.trim() || join(process.cwd(), ".meta-player");
 const DATABASE_PATH = join(APP_DATA_DIRECTORY, "meta-player.db");
 const DEFAULT_MATERIAL_DIRECTORY = join(APP_DATA_DIRECTORY, "materials");
 

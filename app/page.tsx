@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ProjectItem, ProjectView } from "@/components/project-view";
 import { SidebarMenu } from "@/components/sidebar-menu";
 import { MediaLibrary, MediaItem } from "@/components/media-library";
@@ -629,16 +629,19 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleSearchOutline = async (query: string) => {
-    if (!currentProjectId) {
-      return {
-        mode: "keyword" as const,
-        results: [],
-      };
-    }
+  const handleSearchOutline = useCallback(
+    async (query: string) => {
+      if (!currentProjectId) {
+        return {
+          mode: "keyword" as const,
+          results: [],
+        };
+      }
 
-    return searchProjectStoryOutline(currentProjectId, query);
-  };
+      return searchProjectStoryOutline(currentProjectId, query);
+    },
+    [currentProjectId]
+  );
 
   /**
    * 当选中素材变化、或该素材的大纲被新的 AI 结果替换时，

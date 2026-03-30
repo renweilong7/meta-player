@@ -121,6 +121,7 @@ export function MediaLibrary({
   const [searchMode, setSearchMode] = useState<SearchMode>("materials");
   const [searchQuery, setSearchQuery] = useState("");
   const [submittedSearchQuery, setSubmittedSearchQuery] = useState("");
+  const [outlineSearchRequestId, setOutlineSearchRequestId] = useState(0);
   const [outlineSearchResults, setOutlineSearchResults] = useState<
     StoryOutlineSearchResult[]
   >([]);
@@ -156,12 +157,11 @@ export function MediaLibrary({
 
   const handleSubmitSearch = () => {
     setSubmittedSearchQuery(searchQuery.trim());
+    setOutlineSearchRequestId((current) => current + 1);
   };
 
   useEffect(() => {
-    if (searchMode !== "outline") {
-      setOutlineSearchResults([]);
-      setOutlineSearchState("idle");
+    if (outlineSearchRequestId === 0) {
       return;
     }
 
@@ -202,7 +202,7 @@ export function MediaLibrary({
     return () => {
       isActive = false;
     };
-  }, [normalizedSubmittedQuery, onSearchOutline, searchMode, submittedSearchQuery]);
+  }, [normalizedSubmittedQuery, onSearchOutline, outlineSearchRequestId, submittedSearchQuery]);
 
   const handleOpenDialog = (type: DialogType, itemId: string, e: React.MouseEvent) => {
     e.stopPropagation();

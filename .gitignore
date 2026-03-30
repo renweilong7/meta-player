@@ -20,6 +20,9 @@ tsconfig.tsbuildinfo
 # Local app/runtime data
 .meta-player/
 .codex/
+dist/
+release/
 
 # Session-local agent artifacts
 .agents/skills/electron/
+skills-lock.json
