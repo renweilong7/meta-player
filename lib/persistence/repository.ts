@@ -285,7 +285,17 @@ const getMediaTypeFromMime = (mimeType: string, filename: string): "video" | "im
   return "video";
 };
 
-const readSettingsMap = () => {
+/**
+ * 统一读取 `app_setting` 全量键值。
+ *
+ * 当前项目里，应用设置和本地授权配置都落在同一张表中：
+ * - 设置项更偏用户配置。
+ * - 授权项更偏本地缓存的许可快照。
+ *
+ * 这里返回 `Map` 而不是裸数组，后续读取任意键时可以保持 O(1) 查找，
+ * 也避免每个调用点都重复写“遍历数组找 key”的样板代码。
+ */
+export const readAppSettingMap = () => {
   const database = getDatabase();
   const rows = database
     .prepare("SELECT key, value FROM app_setting")
@@ -294,8 +304,37 @@ const readSettingsMap = () => {
   return new Map(rows.map((row) => [row.key, row.value]));
 };
 
+/**
+ * 统一 upsert `app_setting`。
+ *
+ * 这一层只做最小能力：
+ * - 批量写入键值。
+ * - 自动更新 `updated_at`。
+ *
+ * 业务含义由调用方决定，例如：
+ * - `materialSavePath` 这类设置项。
+ * - `license.mode` 这类授权快照字段。
+ */
+export const saveAppSettingValues = (entries: Record<string, string>) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+  const statement = database.prepare(`
+    INSERT INTO app_setting (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      value = excluded.value,
+      updated_at = excluded.updated_at
+  `);
+
+  runInTransaction(() => {
+    Object.entries(entries).forEach(([key, value]) => {
+      statement.run(key, value, now);
+    });
+  });
+};
+
 export const getSettings = (): PersistedAppSettings => {
-  const stored = readSettingsMap();
+  const stored = readAppSettingMap();
 
   return {
     materialSavePath: stored.get("materialSavePath") ?? SETTINGS_DEFAULTS.materialSavePath,
@@ -318,30 +357,16 @@ export const getSettings = (): PersistedAppSettings => {
 };
 
 export const saveSettings = (settings: PersistedAppSettings) => {
-  const database = getDatabase();
-  const now = toIsoNow();
-  const statement = database.prepare(`
-    INSERT INTO app_setting (key, value, updated_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET
-      value = excluded.value,
-      updated_at = excluded.updated_at
-  `);
-
-  runInTransaction(() => {
-    statement.run("materialSavePath", settings.materialSavePath, now);
-    statement.run(
-      "defaultManagedImport",
-      String(settings.defaultManagedImport),
-      now
-    );
-    statement.run("aiApiBaseUrl", settings.aiApiBaseUrl, now);
-    statement.run("aiApiKey", settings.aiApiKey, now);
-    statement.run("aiModelName", settings.aiModelName, now);
-    statement.run("storySearchProvider", settings.storySearchProvider, now);
-    statement.run("aiEmbeddingModelName", settings.aiEmbeddingModelName, now);
-    statement.run("localEmbeddingModelName", settings.localEmbeddingModelName, now);
-    statement.run("aiSearchModelName", settings.aiSearchModelName, now);
+  saveAppSettingValues({
+    materialSavePath: settings.materialSavePath,
+    defaultManagedImport: String(settings.defaultManagedImport),
+    aiApiBaseUrl: settings.aiApiBaseUrl,
+    aiApiKey: settings.aiApiKey,
+    aiModelName: settings.aiModelName,
+    storySearchProvider: settings.storySearchProvider,
+    aiEmbeddingModelName: settings.aiEmbeddingModelName,
+    localEmbeddingModelName: settings.localEmbeddingModelName,
+    aiSearchModelName: settings.aiSearchModelName,
   });
 
   ensureDirectory(settings.materialSavePath);

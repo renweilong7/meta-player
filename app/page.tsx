@@ -9,6 +9,8 @@ import {
   AppSettingsValues,
   SettingsPanel,
 } from "@/components/settings-panel";
+import { UserPanel } from "@/components/user-panel";
+import { UnauthorizedHome } from "@/components/unauthorized-home";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
 import { StoryOutline } from "@/components/story-outline";
 import {
@@ -18,6 +20,8 @@ import {
 } from "@/components/ui/resizable";
 import {
   fetchLibrarySnapshot,
+  fetchAuthorizationSnapshot,
+  refreshAuthorizationSnapshot,
   importMaterials,
   indexMaterialOutline,
   patchProject,
@@ -31,6 +35,8 @@ import {
   removeProject,
   searchProjectStoryOutline,
 } from "@/lib/persistence/client";
+import { AuthorizationSnapshot } from "@/lib/license/types";
+import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
 import { MaterialImportInput } from "@/lib/persistence/types";
 import {
   generateStoryOutline,
@@ -110,7 +116,11 @@ export default function VideoEditorPage() {
   const [savedSettings, setSavedSettings] = useState<AppSettingsValues>(defaultSettings);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [authorization, setAuthorization] = useState<AuthorizationSnapshot | null>(
+    null
+  );
   const [pendingOutlineSearchResult, setPendingOutlineSearchResult] =
     useState<StoryOutlineSearchResult | null>(null);
   const playerRef = useRef<VideoPlayerHandle>(null);
@@ -128,6 +138,33 @@ export default function VideoEditorPage() {
   ) as Record<number, string>;
   const hasPendingSettingsChanges =
     JSON.stringify(settings) !== JSON.stringify(savedSettings);
+  const isAuthorized = isAuthorizedStatus(authorization?.status);
+  const canManageProjects = hasAuthorizedFeature(
+    authorization,
+    "base.project_management"
+  );
+  const canManageMaterials = hasAuthorizedFeature(
+    authorization,
+    "base.material_management"
+  );
+  const canUsePlayback = hasAuthorizedFeature(authorization, "base.playback");
+  const canUseOutlineBasic = hasAuthorizedFeature(
+    authorization,
+    "base.outline_basic"
+  );
+  const canUseOutlineSearch = hasAuthorizedFeature(
+    authorization,
+    "base.search_basic"
+  );
+  const canManageSettings = hasAuthorizedFeature(
+    authorization,
+    "base.settings_basic"
+  );
+  const canManageMarkers = hasAuthorizedFeature(authorization, "pro.marker");
+  const markerDisabledReason =
+    selectedMedia && !canManageMarkers
+      ? "高级授权可用：标记与审片功能当前未开通。"
+      : null;
 
   /**
    * 首屏统一加载持久化快照。
@@ -143,6 +180,7 @@ export default function VideoEditorPage() {
 
       try {
         const snapshot = await fetchLibrarySnapshot();
+        const authorizationSnapshot = await fetchAuthorizationSnapshot();
         const legacyProjects =
           snapshot.projects.length === 0 ? loadLegacyProjects(snapshot.materials) : [];
         const nextProjects =
@@ -172,6 +210,7 @@ export default function VideoEditorPage() {
         setMediaItems(snapshot.materials);
         setSettings(snapshot.settings);
         setSavedSettings(snapshot.settings);
+        setAuthorization(authorizationSnapshot);
         setProjects(nextProjects);
         setCurrentProjectId((current) => current ?? nextProjects[0]?.id ?? null);
 
@@ -199,6 +238,17 @@ export default function VideoEditorPage() {
       isActive = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      authorization &&
+      !isAuthorized &&
+      activeMenu !== "home" &&
+      activeMenu !== "user"
+    ) {
+      setActiveMenu("home");
+    }
+  }, [activeMenu, authorization, isAuthorized]);
 
   /**
    * 当项目范围内的当前选中素材被删除或切换项目后，自动切到列表第一项。
@@ -395,14 +445,21 @@ export default function VideoEditorPage() {
       return;
     }
 
-    const updated = await postMaterialMarker(selectedMediaId, {
-      time: pendingMarkerTime,
-      content,
-    });
+    try {
+      const updated = await postMaterialMarker(selectedMediaId, {
+        time: pendingMarkerTime,
+        content,
+      });
 
-    replaceMaterialInState(updated);
-    setSelectedMediaId(updated.id);
-    setPendingMarkerTime(null);
+      replaceMaterialInState(updated);
+      setSelectedMediaId(updated.id);
+      setPendingMarkerTime(null);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "创建标记失败。"
+      );
+      throw error;
+    }
   };
 
   const handleMarkStart = () => {
@@ -426,14 +483,21 @@ export default function VideoEditorPage() {
       return;
     }
 
-    const updated = await patchMaterialMarker(selectedMediaId, markerId, {
-      time: pendingMarkerTime,
-      content,
-    });
+    try {
+      const updated = await patchMaterialMarker(selectedMediaId, markerId, {
+        time: pendingMarkerTime,
+        content,
+      });
 
-    replaceMaterialInState(updated);
-    setSelectedMediaId(updated.id);
-    setPendingMarkerTime(null);
+      replaceMaterialInState(updated);
+      setSelectedMediaId(updated.id);
+      setPendingMarkerTime(null);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "更新标记失败。"
+      );
+      throw error;
+    }
   };
 
   const handleDeleteMarker = async (markerId: string) => {
@@ -441,17 +505,24 @@ export default function VideoEditorPage() {
       return;
     }
 
-    await removeMaterialMarker(selectedMediaId, markerId);
-    setMediaItems((previous) =>
-      previous.map((item) =>
-        item.id === selectedMediaId
-          ? {
-              ...item,
-              markers: (item.markers ?? []).filter((marker) => marker.id !== markerId),
-            }
-          : item
-      )
-    );
+    try {
+      await removeMaterialMarker(selectedMediaId, markerId);
+      setMediaItems((previous) =>
+        previous.map((item) =>
+          item.id === selectedMediaId
+            ? {
+                ...item,
+                markers: (item.markers ?? []).filter((marker) => marker.id !== markerId),
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "删除标记失败。"
+      );
+      throw error;
+    }
   };
 
   /**
@@ -510,6 +581,22 @@ export default function VideoEditorPage() {
 
   const handleBrowseMaterialDirectory = () => {
     console.log("目录选择接口预留");
+  };
+
+  const handleRefreshAuthorization = async () => {
+    setIsRefreshingAuthorization(true);
+    setLibraryError(null);
+
+    try {
+      const nextAuthorization = await refreshAuthorizationSnapshot();
+      setAuthorization(nextAuthorization);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "刷新授权状态失败。"
+      );
+    } finally {
+      setIsRefreshingAuthorization(false);
+    }
   };
 
   /**
@@ -674,12 +761,27 @@ export default function VideoEditorPage() {
     setPendingOutlineSearchResult(null);
   }, [pendingOutlineSearchResult, selectedMedia?.id]);
 
+  const visibleMenuIds = isAuthorized
+    ? [
+        "home",
+        "videos",
+        "user",
+        ...(canManageSettings ? ["settings"] : []),
+      ]
+    : ["home", "user"];
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
       {/* 最左侧菜单栏 */}
-      <SidebarMenu activeMenu={activeMenu} onMenuChange={setActiveMenu} />
+      <SidebarMenu
+        activeMenu={activeMenu}
+        onMenuChange={setActiveMenu}
+        visibleMenuIds={visibleMenuIds}
+      />
 
-      {activeMenu === "settings" ? (
+      {!isAuthorized && activeMenu === "home" ? (
+        <UnauthorizedHome onOpenUserPage={() => setActiveMenu("user")} />
+      ) : activeMenu === "settings" && canManageSettings ? (
         <SettingsPanel
           values={settings}
           hasPendingChanges={hasPendingSettingsChanges}
@@ -688,11 +790,18 @@ export default function VideoEditorPage() {
           onSave={handleSaveSettings}
           onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
         />
+      ) : activeMenu === "user" ? (
+        <UserPanel
+          authorization={authorization}
+          isRefreshingAuthorization={isRefreshingAuthorization}
+          onRefreshAuthorization={handleRefreshAuthorization}
+        />
       ) : activeMenu === "home" ? (
         <div className="flex-1 min-w-0">
           <ProjectView
             items={projects}
             selectedProjectId={currentProjectId}
+            canManageProjects={canManageProjects}
             onCreateProject={handleCreateProject}
             onUpdateProject={handleUpdateProject}
             onDeleteProject={handleDeleteProject}
@@ -717,6 +826,9 @@ export default function VideoEditorPage() {
                   items={visibleMediaItems}
                   selectedId={selectedMediaId}
                   projectName={currentProject.name}
+                  canManageMaterials={canManageMaterials}
+                  canUseOutlineBasic={canUseOutlineBasic}
+                  canUseOutlineSearch={canUseOutlineSearch}
                   onSelect={setSelectedMediaId}
                   onUpdateItem={handleUpdateMediaItem}
                   onAddMaterials={handleAddMaterials}
@@ -748,8 +860,8 @@ export default function VideoEditorPage() {
                     <VideoPlayer
                       ref={playerRef}
                       title={selectedMedia?.title}
-                      src={selectedMedia?.src}
-                      mediaType={selectedMedia?.mediaType}
+                      src={canUsePlayback ? selectedMedia?.src : undefined}
+                      mediaType={canUsePlayback ? selectedMedia?.mediaType : "video"}
                       highlight={selectedMediaHighlight}
                       onTimeChange={(time) => handlePlayerTimeChange(time)}
                     />
@@ -760,7 +872,8 @@ export default function VideoEditorPage() {
                   <ResizablePanel defaultSize={44} minSize={12}>
                     <VideoEditorWorkspace
                       mediaTitle={selectedMedia?.title}
-                      disabled={!selectedMedia}
+                      disabled={!selectedMedia || !canManageMarkers}
+                      disabledReason={markerDisabledReason}
                       pendingMarkerTime={pendingMarkerTime}
                       markers={selectedMedia?.markers ?? []}
                       onMarkStart={handleMarkStart}

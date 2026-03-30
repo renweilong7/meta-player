@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import {
   appendMaterialsToProject,
   importMaterialFromBuffer,
@@ -27,6 +28,7 @@ const isUploadedFileLike = (entry: FormDataEntryValue): boolean =>
  */
 export async function POST(request: Request) {
   try {
+    assertLicensedFeature("base.material_management");
     const formData = await request.formData();
     const files = formData
       .getAll("files")
@@ -60,6 +62,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ materials: importedMaterials });
   } catch (error) {
+    if (error instanceof LicenseAccessError) {
+      return NextResponse.json({ message: error.message }, { status: 403 });
+    }
+
     const message =
       error instanceof Error ? error.message : "素材导入失败，未捕获到具体错误信息。";
 

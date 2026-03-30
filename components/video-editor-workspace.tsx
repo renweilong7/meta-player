@@ -16,6 +16,7 @@ import { PersistedMaterialMarker } from "@/lib/persistence/types";
 interface VideoEditorWorkspaceProps {
   mediaTitle?: string;
   disabled?: boolean;
+  disabledReason?: string | null;
   pendingMarkerTime?: number | null;
   markers?: PersistedMaterialMarker[];
   onCreateMarker?: (content: string) => Promise<void>;
@@ -38,6 +39,7 @@ const formatSeconds = (value: number) => {
 export function VideoEditorWorkspace({
   mediaTitle,
   disabled = false,
+  disabledReason = null,
   pendingMarkerTime = null,
   markers = [],
   onCreateMarker,
@@ -170,7 +172,9 @@ export function VideoEditorWorkspace({
         <div>
           <h3 className="text-sm font-semibold text-foreground">编辑工作区</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {mediaTitle} · 当前已启用素材级标记能力，后续会继续扩展更多素材级与切片级能力。
+            {disabledReason
+              ? `${mediaTitle} · ${disabledReason}`
+              : `${mediaTitle} · 当前已启用素材级标记能力，后续会继续扩展更多素材级与切片级能力。`}
           </p>
         </div>
         <Button size="sm" onClick={handleOpenCreateDialog} disabled={disabled}>
@@ -193,7 +197,9 @@ export function VideoEditorWorkspace({
                 <div>
                   <p className="text-sm font-medium text-foreground">还没有标记</p>
                   <p className="mt-2 text-xs leading-6 text-muted-foreground">
-                    点击右上角“标记”按钮，为当前素材记录关键时间点和说明。
+                    {disabledReason
+                      ? disabledReason
+                      : "点击右上角“标记”按钮，为当前素材记录关键时间点和说明。"}
                   </p>
                 </div>
               </div>
@@ -222,6 +228,7 @@ export function VideoEditorWorkspace({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
+                        disabled={disabled}
                         onClick={() => handleOpenEditDialog(marker)}
                       >
                         <Pencil className="h-4 w-4" />
@@ -230,6 +237,7 @@ export function VideoEditorWorkspace({
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-destructive"
+                        disabled={disabled}
                         onClick={() => void onDeleteMarker?.(marker.id)}
                       >
                         <Trash2 className="h-4 w-4" />

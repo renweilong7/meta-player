@@ -1,3 +1,4 @@
+import { resolveSearchProviderByLicense } from "@/lib/license/service";
 import { PersistedAppSettings, PersistedMaterial } from "@/lib/persistence/types";
 import {
   getMaterialById,
@@ -44,6 +45,9 @@ export const indexMaterialOutline = async (
   material: PersistedMaterial,
   settings: PersistedAppSettings
 ) => {
+  const effectiveProvider = resolveSearchProviderByLicense(
+    settings.storySearchProvider
+  );
   const baseSegments = buildSegmentsForMaterial(material);
 
   if (baseSegments.length === 0) {
@@ -51,7 +55,7 @@ export const indexMaterialOutline = async (
     return { indexedCount: 0, mode: "empty" as const };
   }
 
-  if (settings.storySearchProvider !== "remote_embedding" || !hasEmbeddingConfig(settings)) {
+  if (effectiveProvider !== "remote_embedding" || !hasEmbeddingConfig(settings)) {
     replaceOutlineSegmentsForAsset(
       material.id,
       baseSegments.map((segment) => ({
@@ -124,6 +128,12 @@ export const searchProjectOutline = async (input: {
   mode: "embedding" | "keyword" | "llm";
   results: StoryOutlineSearchResult[];
 }> => {
+  const effectiveSettings: PersistedAppSettings = {
+    ...input.settings,
+    storySearchProvider: resolveSearchProviderByLicense(
+      input.settings.storySearchProvider
+    ),
+  };
   const limit = input.limit ?? 20;
   let segments = listOutlineSegmentsByProjectId(input.projectId);
   if (segments.length === 0) {
@@ -133,7 +143,7 @@ export const searchProjectOutline = async (input: {
 
     if (materials.length > 0) {
       await Promise.allSettled(
-        materials.map((material) => indexMaterialOutline(material, input.settings))
+        materials.map((material) => indexMaterialOutline(material, effectiveSettings))
       );
       segments = listOutlineSegmentsByProjectId(input.projectId);
     }
@@ -143,8 +153,8 @@ export const searchProjectOutline = async (input: {
     return { mode: "keyword", results: [] };
   }
 
-  if (input.settings.storySearchProvider === "llm") {
-    if (!canUseLlmStorySearch(input.settings)) {
+  if (effectiveSettings.storySearchProvider === "llm") {
+    if (!canUseLlmStorySearch(effectiveSettings)) {
       return createKeywordFallback(segments, input.query, limit);
     }
 
@@ -156,7 +166,7 @@ export const searchProjectOutline = async (input: {
       const results = await rankStorySegmentsWithLlm({
         query: input.query,
         candidates: segments,
-        settings: input.settings,
+        settings: effectiveSettings,
         limit,
       });
 
@@ -168,7 +178,7 @@ export const searchProjectOutline = async (input: {
     return createKeywordFallback(segments, input.query, limit);
   }
 
-  if (input.settings.storySearchProvider === "local_embedding") {
+  if (effectiveSettings.storySearchProvider === "local_embedding") {
     return createKeywordFallback(segments, input.query, limit);
   }
 
@@ -177,12 +187,12 @@ export const searchProjectOutline = async (input: {
       Array.isArray(segment.embedding) && segment.embedding.length > 0
   );
 
-  if (embeddedSegments.length > 0 && hasEmbeddingConfig(input.settings)) {
+  if (embeddedSegments.length > 0 && hasEmbeddingConfig(effectiveSettings)) {
     try {
       const [queryEmbedding] = await generateEmbeddings([input.query], {
-        baseUrl: input.settings.aiApiBaseUrl,
-        apiKey: input.settings.aiApiKey,
-        model: input.settings.aiEmbeddingModelName,
+        baseUrl: effectiveSettings.aiApiBaseUrl,
+        apiKey: effectiveSettings.aiApiKey,
+        model: effectiveSettings.aiEmbeddingModelName,
       });
 
       const ranked = embeddedSegments

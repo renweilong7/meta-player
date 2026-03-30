@@ -17,6 +17,7 @@ import {
 interface SidebarMenuProps {
   activeMenu: string;
   onMenuChange: (menu: string) => void;
+  visibleMenuIds?: string[];
 }
 
 const menuItems = [
@@ -29,7 +30,14 @@ const bottomItems = [
   { id: "settings", icon: Settings, label: "设置" },
 ];
 
-export function SidebarMenu({ activeMenu, onMenuChange }: SidebarMenuProps) {
+export function SidebarMenu({
+  activeMenu,
+  onMenuChange,
+  visibleMenuIds,
+}: SidebarMenuProps) {
+  const isVisible = (menuId: string) =>
+    !visibleMenuIds || visibleMenuIds.includes(menuId);
+
   return (
     <TooltipProvider delayDuration={100}>
       <div className="flex h-full w-16 flex-col items-center border-r border-border bg-sidebar py-4">
@@ -40,7 +48,7 @@ export function SidebarMenu({ activeMenu, onMenuChange }: SidebarMenuProps) {
 
         {/* Top Menu Items */}
         <nav className="flex flex-1 flex-col items-center gap-1">
-          {menuItems.map((item) => (
+          {menuItems.filter((item) => isVisible(item.id)).map((item) => (
             <Tooltip key={item.id}>
               <TooltipTrigger asChild>
                 <button
@@ -64,7 +72,7 @@ export function SidebarMenu({ activeMenu, onMenuChange }: SidebarMenuProps) {
 
         {/* Bottom Menu Items */}
         <div className="flex flex-col items-center gap-1">
-          {bottomItems.map((item) => (
+          {bottomItems.filter((item) => isVisible(item.id)).map((item) => (
             <Tooltip key={item.id}>
               <TooltipTrigger asChild>
                 <button

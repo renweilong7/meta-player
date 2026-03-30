@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getSettings, saveSettings } from "@/lib/persistence/repository";
 import { PersistedAppSettings } from "@/lib/persistence/types";
 
@@ -9,19 +10,29 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
-  const body = (await request.json()) as PersistedAppSettings;
+  try {
+    assertLicensedFeature("base.settings_basic");
+    const body = (await request.json()) as PersistedAppSettings;
 
-  return NextResponse.json(
-    saveSettings({
-      materialSavePath: body.materialSavePath,
-      defaultManagedImport: body.defaultManagedImport,
-      aiApiBaseUrl: body.aiApiBaseUrl,
-      aiApiKey: body.aiApiKey,
-      aiModelName: body.aiModelName,
-      storySearchProvider: body.storySearchProvider,
-      aiEmbeddingModelName: body.aiEmbeddingModelName,
-      localEmbeddingModelName: body.localEmbeddingModelName,
-      aiSearchModelName: body.aiSearchModelName,
-    })
-  );
+    return NextResponse.json(
+      saveSettings({
+        materialSavePath: body.materialSavePath,
+        defaultManagedImport: body.defaultManagedImport,
+        aiApiBaseUrl: body.aiApiBaseUrl,
+        aiApiKey: body.aiApiKey,
+        aiModelName: body.aiModelName,
+        storySearchProvider: body.storySearchProvider,
+        aiEmbeddingModelName: body.aiEmbeddingModelName,
+        localEmbeddingModelName: body.localEmbeddingModelName,
+        aiSearchModelName: body.aiSearchModelName,
+      })
+    );
+  } catch (error) {
+    if (error instanceof LicenseAccessError) {
+      return NextResponse.json({ message: error.message }, { status: 403 });
+    }
+
+    const message = error instanceof Error ? error.message : "保存设置失败。";
+    return NextResponse.json({ message }, { status: 400 });
+  }
 }

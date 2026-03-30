@@ -64,6 +64,9 @@ interface MediaLibraryProps {
   items: MediaItem[];
   selectedId: string | null;
   projectName?: string | null;
+  canManageMaterials?: boolean;
+  canUseOutlineBasic?: boolean;
+  canUseOutlineSearch?: boolean;
   onSelect: (id: string) => void;
   onUpdateItem?: (id: string, updates: Partial<MediaItem>) => void | Promise<void>;
   onAddMaterials?: (files: File[]) => void | Promise<void>;
@@ -83,6 +86,9 @@ export function MediaLibrary({
   items,
   selectedId,
   projectName = null,
+  canManageMaterials = true,
+  canUseOutlineBasic = true,
+  canUseOutlineSearch = true,
   onSelect,
   onUpdateItem,
   onAddMaterials,
@@ -98,6 +104,10 @@ export function MediaLibrary({
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<string | null>(null);
 
   const handleAddClick = () => {
+    if (!canManageMaterials) {
+      return;
+    }
+
     fileInputRef.current?.click();
   };
 
@@ -156,9 +166,19 @@ export function MediaLibrary({
   }, [items, normalizedQuery, searchMode]);
 
   const handleSubmitSearch = () => {
+    if (searchMode === "outline" && !canUseOutlineSearch) {
+      return;
+    }
+
     setSubmittedSearchQuery(searchQuery.trim());
     setOutlineSearchRequestId((current) => current + 1);
   };
+
+  useEffect(() => {
+    if (searchMode === "outline" && !canUseOutlineSearch) {
+      setSearchMode("materials");
+    }
+  }, [canUseOutlineSearch, searchMode]);
 
   useEffect(() => {
     if (outlineSearchRequestId === 0) {
@@ -296,7 +316,7 @@ export function MediaLibrary({
             onClick={handleAddClick}
             variant="ghost"
             size="icon"
-            disabled={isImportingMaterials}
+            disabled={!canManageMaterials || isImportingMaterials}
             className="h-8 w-8 text-muted-foreground hover:text-card-foreground"
           >
             {isImportingMaterials ? (
@@ -314,25 +334,27 @@ export function MediaLibrary({
             onChange={handleFileChange}
           />
         </div>
-        <ToggleGroup
-          type="single"
-          value={searchMode}
-          onValueChange={(value) => {
-            if (value === "materials" || value === "outline") {
-              setSearchMode(value);
-            }
-          }}
-          variant="outline"
-          size="sm"
-          className="mt-3 grid w-full grid-cols-2"
-        >
-          <ToggleGroupItem value="materials" aria-label="搜索素材">
-            素材
-          </ToggleGroupItem>
-          <ToggleGroupItem value="outline" aria-label="搜索剧情">
-            剧情
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {canUseOutlineSearch ? (
+          <ToggleGroup
+            type="single"
+            value={searchMode}
+            onValueChange={(value) => {
+              if (value === "materials" || value === "outline") {
+                setSearchMode(value);
+              }
+            }}
+            variant="outline"
+            size="sm"
+            className="mt-3 grid w-full grid-cols-2"
+          >
+            <ToggleGroupItem value="materials" aria-label="搜索素材">
+              素材
+            </ToggleGroupItem>
+            <ToggleGroupItem value="outline" aria-label="搜索剧情">
+              剧情
+            </ToggleGroupItem>
+          </ToggleGroup>
+        ) : null}
         <div className="mt-3 flex items-center gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -346,7 +368,9 @@ export function MediaLibrary({
                 }
               }}
               placeholder={
-                searchMode === "materials" ? "搜索素材..." : "搜索当前项目中的剧情片段..."
+                searchMode === "materials"
+                  ? "搜索素材..."
+                  : "搜索当前项目中的剧情片段..."
               }
               className="h-9 pl-9 bg-input border-border text-foreground placeholder:text-muted-foreground"
             />
@@ -375,7 +399,9 @@ export function MediaLibrary({
           <div className="flex h-full min-h-72 flex-col items-center justify-center px-6 text-center">
             <p className="text-sm font-medium text-foreground">当前项目还没有素材</p>
             <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
-              点击右上角的加号，把视频或图片导入到当前项目。
+              {canManageMaterials
+                ? "点击右上角的加号，把视频或图片导入到当前项目。"
+                : "当前授权不包含素材管理能力。"}
             </p>
           </div>
         ) : searchMode === "outline" ? (
@@ -451,7 +477,12 @@ export function MediaLibrary({
             const hasOutline = Boolean(item.storyOutline?.length);
             const isExtracting = item.outlineExtractionStatus === "loading";
             const isDeleting = isDeletingMaterialId === item.id;
-            const canExtractOutline = hasSynopsis && hasSrt && !isExtracting && !isDeleting;
+            const canExtractOutline =
+              canUseOutlineBasic &&
+              hasSynopsis &&
+              hasSrt &&
+              !isExtracting &&
+              !isDeleting;
 
             return (
               <div
@@ -527,45 +558,55 @@ export function MediaLibrary({
                 </div>
 
               {/* More Button with Dropdown */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 shrink-0 self-start opacity-0 text-muted-foreground hover:text-card-foreground group-hover:opacity-100 group-focus-within:opacity-100"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem onClick={(e) => handleOpenDialog("synopsis", item.id, e as unknown as React.MouseEvent)}>
-                    <FileText className="mr-2 h-4 w-4" />
-                    剧情简介
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={(e) => handleOpenDialog("srt", item.id, e as unknown as React.MouseEvent)}>
-                    <FileUp className="mr-2 h-4 w-4" />
-                    导入 SRT
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!canExtractOutline}
-                    onClick={(e) =>
-                      handleExtractOutline(item.id, e as unknown as React.MouseEvent)
-                    }
-                  >
-                    <ListTree className="mr-2 h-4 w-4" />
-                    {isExtracting ? "提取中..." : "提取大纲"}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={isDeleting}
-                    className="text-destructive focus:text-destructive"
-                    onClick={(e) => handleDelete(item.id, e as unknown as React.MouseEvent)}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {isDeleting ? "删除中..." : "删除素材"}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              {canManageMaterials || canUseOutlineBasic ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 shrink-0 self-start opacity-0 text-muted-foreground hover:text-card-foreground group-hover:opacity-100 group-focus-within:opacity-100"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    {canManageMaterials ? (
+                      <>
+                        <DropdownMenuItem onClick={(e) => handleOpenDialog("synopsis", item.id, e as unknown as React.MouseEvent)}>
+                          <FileText className="mr-2 h-4 w-4" />
+                          剧情简介
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={(e) => handleOpenDialog("srt", item.id, e as unknown as React.MouseEvent)}>
+                          <FileUp className="mr-2 h-4 w-4" />
+                          导入 SRT
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                    {canUseOutlineBasic ? (
+                      <DropdownMenuItem
+                        disabled={!canExtractOutline}
+                        onClick={(e) =>
+                          handleExtractOutline(item.id, e as unknown as React.MouseEvent)
+                        }
+                      >
+                        <ListTree className="mr-2 h-4 w-4" />
+                        {isExtracting ? "提取中..." : "提取大纲"}
+                      </DropdownMenuItem>
+                    ) : null}
+                    {canManageMaterials ? (
+                      <DropdownMenuItem
+                        disabled={isDeleting}
+                        className="text-destructive focus:text-destructive"
+                        onClick={(e) => handleDelete(item.id, e as unknown as React.MouseEvent)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {isDeleting ? "删除中..." : "删除素材"}
+                      </DropdownMenuItem>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : null}
               </div>
             );
           })}
@@ -630,7 +671,7 @@ export function MediaLibrary({
                 rows={8}
                 className="h-64 resize-none overflow-y-auto font-mono text-sm"
               />
-              <Button variant="outline" className="w-full">
+              <Button variant="outline" className="w-full" disabled>
                 <FileUp className="mr-2 h-4 w-4" />
                 上传 SRT 文件
               </Button>

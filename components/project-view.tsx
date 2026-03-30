@@ -38,6 +38,7 @@ export interface ProjectItem {
 interface ProjectViewProps {
   items: ProjectItem[];
   selectedProjectId: string | null;
+  canManageProjects?: boolean;
   onCreateProject: (input: { name: string; description?: string }) => void | Promise<void>;
   onUpdateProject: (
     id: string,
@@ -50,6 +51,7 @@ interface ProjectViewProps {
 export function ProjectView({
   items,
   selectedProjectId,
+  canManageProjects = true,
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
@@ -128,10 +130,12 @@ export function ProjectView({
               从这里进入项目工作台，项目内的素材、播放器和剧情大纲会一起联动。
             </p>
           </div>
-          <Button onClick={handleCreateClick} className="gap-2">
-            <Plus className="h-4 w-4" />
-            新建项目
-          </Button>
+          {canManageProjects ? (
+            <Button onClick={handleCreateClick} className="gap-2">
+              <Plus className="h-4 w-4" />
+              新建项目
+            </Button>
+          ) : null}
         </div>
 
         <div className="relative mt-4 max-w-md">
@@ -157,10 +161,12 @@ export function ProjectView({
                 ? "创建一个项目后，就可以直接进入对应的素材、播放器和剧情大纲工作台。"
                 : "试试修改关键词，或者直接创建一个新项目。"}
             </p>
-            <Button onClick={handleCreateClick} variant="outline" className="mt-5 gap-2">
-              <Plus className="h-4 w-4" />
-              新建项目
-            </Button>
+            {canManageProjects ? (
+              <Button onClick={handleCreateClick} variant="outline" className="mt-5 gap-2">
+                <Plus className="h-4 w-4" />
+                新建项目
+              </Button>
+            ) : null}
           </div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -190,30 +196,32 @@ export function ProjectView({
                       </p>
                     </div>
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
-                        >
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleEditClick(item)}>
-                          <Edit2 className="mr-2 h-4 w-4" />
-                          编辑项目
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          className="text-destructive focus:text-destructive"
-                          onClick={() => onDeleteProject(item.id)}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          删除项目
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    {canManageProjects ? (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                          >
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => handleEditClick(item)}>
+                            <Edit2 className="mr-2 h-4 w-4" />
+                            编辑项目
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => onDeleteProject(item.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除项目
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : null}
                   </div>
 
                   <div className="mt-5 flex items-center justify-between text-sm text-muted-foreground">
@@ -236,7 +244,10 @@ export function ProjectView({
         )}
       </div>
 
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <Dialog
+        open={canManageProjects && isDialogOpen}
+        onOpenChange={setIsDialogOpen}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingProjectId ? "编辑项目" : "新建项目"}</DialogTitle>

@@ -12,6 +12,7 @@ import {
   ProjectCreateInput,
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
+import { AuthorizationSnapshot } from "@/lib/license/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 const assertOk = async (response: Response) => {
@@ -43,6 +44,34 @@ export const fetchLibrarySnapshot = async (): Promise<PersistedLibrarySnapshot> 
   const response = await assertOk(await fetch("/api/bootstrap", { cache: "no-store" }));
   return (await response.json()) as PersistedLibrarySnapshot;
 };
+
+export const fetchAuthorizationSnapshot =
+  async (): Promise<AuthorizationSnapshot> => {
+    const response = await assertOk(
+      await fetch("/api/device-identity", { cache: "no-store" })
+    );
+    return (await response.json()) as AuthorizationSnapshot;
+  };
+
+/**
+ * 手动刷新授权时，先触发一次服务端同步，再重新拉取用户页展示快照。
+ *
+ * 这样做的原因是：
+ * - `/api/license` 更偏“执行同步动作”。
+ * - `/api/device-identity` 返回的是给 UI 展示的完整授权快照。
+ *
+ * 两步串起来后，用户点击“刷新授权”时能立即看到后台最新结果。
+ */
+export const refreshAuthorizationSnapshot =
+  async (): Promise<AuthorizationSnapshot> => {
+    await assertOk(
+      await fetch("/api/license", {
+        method: "POST",
+      })
+    );
+
+    return fetchAuthorizationSnapshot();
+  };
 
 export const importMaterials = async (
   inputs: MaterialImportInput[],

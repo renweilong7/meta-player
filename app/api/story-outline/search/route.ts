@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  assertLicensedFeature,
+  LicenseAccessError,
+  resolveSearchProviderByLicense,
+} from "@/lib/license/service";
 import { getSettings } from "@/lib/persistence/repository";
 import { searchProjectOutline } from "@/lib/story-outline/index";
 
@@ -20,15 +25,26 @@ export async function POST(request: Request) {
   }
 
   try {
+    assertLicensedFeature("base.search_basic");
+    const settings = getSettings();
     const result = await searchProjectOutline({
       projectId: body.projectId,
       query: body.query,
       limit: body.limit,
-      settings: getSettings(),
+      settings: {
+        ...settings,
+        storySearchProvider: resolveSearchProviderByLicense(
+          settings.storySearchProvider
+        ),
+      },
     });
 
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof LicenseAccessError) {
+      return NextResponse.json({ message: error.message }, { status: 403 });
+    }
+
     const message = error instanceof Error ? error.message : "剧情搜索失败。";
     return NextResponse.json({ message }, { status: 500 });
   }

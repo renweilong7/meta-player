@@ -26,3 +26,7 @@ release/
 # Session-local agent artifacts
 .agents/skills/electron/
 skills-lock.json
+
+
+license-server/
+license-server-cloudflare/
