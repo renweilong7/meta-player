@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, Menu } = require("electron");
 const { spawn } = require("node:child_process");
 const { existsSync } = require("node:fs");
 const http = require("node:http");
@@ -76,15 +76,43 @@ const startProductionServer = async () => {
   return url;
 };
 
+const applyProductionWindowHardening = (mainWindow) => {
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.removeMenu();
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    const key = input.key.toLowerCase();
+    const openDevToolsShortcut =
+      key === "f12" ||
+      ((input.control || input.meta) &&
+        input.shift &&
+        ["i", "j", "c"].includes(key));
+
+    if (openDevToolsShortcut) {
+      event.preventDefault();
+    }
+  });
+  mainWindow.webContents.on("context-menu", (event) => {
+    event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({
+    action: "deny",
+  }));
+};
+
 const createWindow = async () => {
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
+      nodeIntegration: isDev,
+      contextIsolation: !isDev,
+      devTools: isDev,
     },
   });
+
+  if (!isDev) {
+    applyProductionWindowHardening(mainWindow);
+  }
 
   const url = isDev
     ? "http://localhost:3000"
@@ -98,6 +126,10 @@ const createWindow = async () => {
 };
 
 app.whenReady().then(() => {
+  if (!isDev) {
+    Menu.setApplicationMenu(null);
+  }
+
   void createWindow();
 
   app.on("activate", () => {
