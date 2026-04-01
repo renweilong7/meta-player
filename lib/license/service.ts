@@ -28,7 +28,7 @@ const LICENSE_SETTING_KEYS = {
 
 const DEFAULT_LICENSE_CONFIG: StoredLicenseConfig = {
   mode: "basic",
-  status: "active",
+  status: "unregistered",
   expiresAt: null,
   lastSyncAt: null,
   featureOverrides: {},
@@ -36,6 +36,15 @@ const DEFAULT_LICENSE_CONFIG: StoredLicenseConfig = {
 const LICENSE_SYNC_MIN_INTERVAL_MS = 60 * 1000;
 const DEFAULT_LICENSE_SERVER_BASE_URL =
   "https://meta-player-license-server.renweilong7.workers.dev";
+
+const parseIsoTimestamp = (value: string | null | undefined) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 export class LicenseAccessError extends Error {
   featureKey: LicenseFeatureKey;
@@ -233,8 +242,13 @@ const normalizeNullableStoredValue = (value: string | undefined) =>
 /**
  * 本地授权配置使用 `app_setting` 做最小持久化。
  *
- * 当前版本没有远端授权后台，所以先把模式、状态和 override 落在本地。
- * 后续接后台时，这里只需要把“本地写入来源”从人工写入换成服务端同步即可。
+ * 默认值必须是“未授权”而不是“已授权”：
+ * - 新设备首次启动前，远端服务还没确认它是谁。
+ * - 如果这时本地默认就是 active，就会造成“未注册设备默认放行”。
+ *
+ * 所以这里的原则是：
+ * - 只有远端授权服务明确返回 active，客户端才进入已授权状态。
+ * - 任何未同步、同步失败、或本地没有历史授权记录的设备，都先视为未授权。
  */
 export const getStoredLicenseConfig = (): StoredLicenseConfig => {
   const settings = readAppSettingMap();
@@ -316,6 +330,33 @@ const shouldSyncLicense = (
   }
 
   return Date.now() - lastSyncAtMs >= LICENSE_SYNC_MIN_INTERVAL_MS;
+};
+
+/**
+ * 本地有效授权态需要在服务端快照基础上再做一次“时间语义”收敛。
+ *
+ * 关键规则：
+ * - 远端返回 `active` 只是说明“上次同步时它有效”。
+ * - 如果本地已经明确知道 `expiresAt`，那到期后即使断网，也不能继续沿用旧的 active。
+ *
+ * 这样可以避免：
+ * - 后台授权已经过期
+ * - 客户端断网
+ * - 仍然无限期按旧快照继续可用
+ */
+const resolveEffectiveLicenseConfig = (
+  config: StoredLicenseConfig
+): StoredLicenseConfig => {
+  const expiresAtMs = parseIsoTimestamp(config.expiresAt);
+
+  if (config.status === "active" && expiresAtMs !== null && Date.now() >= expiresAtMs) {
+    return {
+      ...config,
+      status: "expired",
+    };
+  }
+
+  return config;
 };
 
 /**
@@ -432,7 +473,10 @@ const getStatusInstructions = (config: StoredLicenseConfig) => {
 };
 
 export const hasLicensedFeature = (featureKey: LicenseFeatureKey) =>
-  resolveFeatureEnabled(getStoredLicenseConfig(), featureKey);
+  resolveFeatureEnabled(
+    resolveEffectiveLicenseConfig(getStoredLicenseConfig()),
+    featureKey
+  );
 
 /**
  * 所有真正有业务含义的写操作或高级能力，都应走这一层显式断言。
@@ -477,12 +521,14 @@ export const getAuthorizationSnapshot = async (options?: {
   forceSync?: boolean;
 }): Promise<AuthorizationSnapshot> => {
   const deviceFingerprint = buildFingerprintSnapshot();
-  let config = getStoredLicenseConfig();
+  let config = resolveEffectiveLicenseConfig(getStoredLicenseConfig());
 
   try {
-    config = await syncStoredLicenseFromRemote({
-      force: options?.forceSync ?? false,
-    });
+    config = resolveEffectiveLicenseConfig(
+      await syncStoredLicenseFromRemote({
+        force: options?.forceSync ?? false,
+      })
+    );
   } catch {
     /**
      * 授权页要尽量可打开：

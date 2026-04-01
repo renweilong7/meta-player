@@ -9,7 +9,7 @@ import {
   RefreshCw,
   Shield,
 } from "lucide-react";
-import { AuthorizationSnapshot, LicenseFeatureStatus, LicenseStatus } from "@/lib/license/types";
+import { AuthorizationSnapshot, LicenseStatus } from "@/lib/license/types";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -43,13 +43,6 @@ export function UserPanel({
     expired: "destructive",
     disabled: "destructive",
   };
-  const featureBadgeVariantByStatus: Record<
-    LicenseFeatureStatus,
-    "default" | "outline"
-  > = {
-    enabled: "default",
-    disabled: "outline",
-  };
 
   const handleCopyFingerprint = async () => {
     if (!authorization?.deviceFingerprint.fingerprintText) {
@@ -78,7 +71,7 @@ export function UserPanel({
           <div>
             <h1 className="text-2xl font-semibold text-foreground">设备授权</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              查看本机指纹和功能授权状态，联系管理员完成后续开通。
+              查看本机指纹和当前授权状态，联系管理员完成后续开通。
             </p>
           </div>
         </div>
@@ -93,7 +86,7 @@ export function UserPanel({
                 设备授权
               </CardTitle>
               <CardDescription>
-                展示本机指纹和后台下发的功能授权状态，便于联系管理员完成机器授权。
+                展示本机指纹和当前授权结果，便于联系管理员完成机器授权。
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
@@ -215,61 +208,16 @@ export function UserPanel({
                               {authorization.lastSyncAt ?? "尚未同步"}
                             </span>
                           </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-muted-foreground">指纹算法</span>
-                            <span className="max-w-[14rem] truncate text-right text-foreground">
-                              {authorization.deviceFingerprint.algorithm}
-                            </span>
-                          </div>
+                          {authorization.status !== "active" ? (
+                            <div className="flex items-center justify-between gap-4">
+                              <span className="text-muted-foreground">指纹算法</span>
+                              <span className="max-w-[14rem] truncate text-right text-foreground">
+                                {authorization.deviceFingerprint.algorithm}
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border border-border bg-card p-4">
-                    <div>
-                      <p className="text-sm font-medium text-foreground">
-                        功能授权粒度
-                      </p>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        后台可针对每个功能单独设置启用状态和有效期。
-                      </p>
-                    </div>
-                    <div className="mt-4 grid gap-3">
-                      {authorization.features.map((feature) => (
-                        <div
-                          key={feature.key}
-                          className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3 md:flex-row md:items-center md:justify-between"
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-foreground">
-                                {feature.name}
-                              </span>
-                              <Badge
-                                variant={
-                                  featureBadgeVariantByStatus[feature.status]
-                                }
-                              >
-                                {feature.status === "enabled"
-                                  ? "已启用"
-                                  : "未启用"}
-                              </Badge>
-                              <Badge variant="outline">
-                                默认归属 {feature.includedInMode === "pro" ? "高级" : "基础"}
-                              </Badge>
-                            </div>
-                            <p className="mt-1 text-sm text-muted-foreground">
-                              {feature.description}
-                            </p>
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            {feature.expiresAt
-                              ? `有效期至 ${feature.expiresAt}`
-                              : "有效期由后台控制"}
-                          </div>
-                        </div>
-                      ))}
                     </div>
                   </div>
                 </div>

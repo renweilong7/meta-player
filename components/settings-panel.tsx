@@ -108,7 +108,7 @@ export function SettingsPanel({
                 存储设置
               </CardTitle>
               <CardDescription>
-                管理本地素材输出位置，后续可接入目录选择器和合法性校验。
+                设置应用保存素材的位置，方便集中管理项目文件和处理结果。
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
@@ -137,7 +137,7 @@ export function SettingsPanel({
                       </Button>
                     </div>
                     <FieldDescription>
-                      这里先保留路径输入和目录选择入口，后续可接真实系统文件选择。
+                      建议选择一个空间充足、便于查找的本地目录。后续导入的素材和相关结果会优先保存在这里。
                     </FieldDescription>
                   </FieldContent>
                 </Field>

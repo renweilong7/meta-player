@@ -59,10 +59,11 @@ export function UnauthorizedHome({
             <QrCode className="h-4 w-4 text-primary" />
             管理员二维码
           </div>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            这里预留给管理员二维码或客服联系方式。后续打包时可以通过环境变量注入图片地址，
-            不需要改业务代码。
-          </p>
+          {adminContact ? (
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              联系管理员：{adminContact}
+            </p>
+          ) : null}
 
           <div className="mt-6 flex items-center justify-center rounded-2xl border border-border bg-background p-4">
             {adminQrUrl ? (
@@ -82,14 +83,6 @@ export function UnauthorizedHome({
                 </p>
               </div>
             )}
-          </div>
-
-          <div className="mt-4 rounded-2xl bg-muted/30 p-4 text-xs leading-6 text-muted-foreground">
-            可选注入项：
-            <br />
-            `NEXT_PUBLIC_LICENSE_ADMIN_QR_URL`
-            <br />
-            `NEXT_PUBLIC_LICENSE_ADMIN_CONTACT`
           </div>
         </aside>
       </div>
