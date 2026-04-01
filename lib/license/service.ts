@@ -35,7 +35,7 @@ const DEFAULT_LICENSE_CONFIG: StoredLicenseConfig = {
 };
 const LICENSE_SYNC_MIN_INTERVAL_MS = 60 * 1000;
 const DEFAULT_LICENSE_SERVER_BASE_URL =
-  "https://meta-player-license-server.renweilong7.workers.dev";
+  "http://47.95.227.51:8787";
 
 const parseIsoTimestamp = (value: string | null | undefined) => {
   if (!value) {
