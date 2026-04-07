@@ -11,6 +11,8 @@ const standaloneStaticRoot = join(standaloneRoot, ".next", "static");
 const buildStaticRoot = join(projectRoot, ".next", "static");
 const publicRoot = join(projectRoot, "public");
 const electronRoot = join(projectRoot, "electron");
+const sqliteVecRoot = join(projectRoot, "bin", "sqlite-vec");
+const embeddingModelsRoot = join(projectRoot, "models", "embeddings");
 const packageJsonPath = join(projectRoot, "package.json");
 
 if (!existsSync(standaloneRoot)) {
@@ -37,6 +39,16 @@ if (existsSync(publicRoot)) {
 }
 
 cpSync(electronRoot, join(distRoot, "electron"), { recursive: true });
+
+if (existsSync(sqliteVecRoot)) {
+  cpSync(sqliteVecRoot, join(distRoot, "sqlite-vec"), { recursive: true });
+}
+
+if (existsSync(embeddingModelsRoot)) {
+  cpSync(embeddingModelsRoot, join(distRoot, "models", "embeddings"), {
+    recursive: true,
+  });
+}
 
 const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 

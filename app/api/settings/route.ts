@@ -23,8 +23,12 @@ export async function PUT(request: Request) {
         aiModelName: body.aiModelName,
         storySearchProvider: body.storySearchProvider,
         aiEmbeddingModelName: body.aiEmbeddingModelName,
+        localEmbeddingModelDirectory: body.localEmbeddingModelDirectory,
         localEmbeddingModelName: body.localEmbeddingModelName,
         aiSearchModelName: body.aiSearchModelName,
+        localTtsModelName: body.localTtsModelName,
+        autoGenerateProjectScriptTts: body.autoGenerateProjectScriptTts,
+        crossAssetSwitchMode: body.crossAssetSwitchMode,
       })
     );
   } catch (error) {

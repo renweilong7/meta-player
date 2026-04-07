@@ -4,12 +4,11 @@ import { useState } from "react";
 import {
   CheckCheck,
   Copy,
-  Crown,
   MonitorSmartphone,
   RefreshCw,
   Shield,
 } from "lucide-react";
-import { AuthorizationSnapshot, LicenseStatus } from "@/lib/license/types";
+import { AuthorizationSnapshot } from "@/lib/license/types";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -32,17 +31,6 @@ export function UserPanel({
   onRefreshAuthorization,
 }: UserPanelProps) {
   const [hasCopiedFingerprint, setHasCopiedFingerprint] = useState(false);
-
-  const statusBadgeVariantByStatus: Record<
-    LicenseStatus,
-    "default" | "secondary" | "destructive" | "outline"
-  > = {
-    active: "default",
-    pending: "secondary",
-    unregistered: "secondary",
-    expired: "destructive",
-    disabled: "destructive",
-  };
 
   const handleCopyFingerprint = async () => {
     if (!authorization?.deviceFingerprint.fingerprintText) {
@@ -105,7 +93,7 @@ export function UserPanel({
                             本机指纹
                           </div>
                           <p className="text-sm text-muted-foreground">
-                            将该指纹发送给管理员，后台可按设备维度控制功能授权。
+                            将该指纹发送给管理员，后台完成授权后即可开放全部功能。
                           </p>
                         </div>
                         <Button
@@ -165,17 +153,26 @@ export function UserPanel({
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-                            <Crown className="h-4 w-4 text-primary" />
-                            当前授权模式
+                            当前授权结果
                           </p>
                           <p className="mt-1 text-lg font-semibold text-foreground">
-                            {authorization.modeLabel}
+                            {authorization.statusLabel}
                           </p>
                           <p className="mt-1 text-sm text-muted-foreground">
                             {authorization.instructions}
                           </p>
                         </div>
-                        <Badge variant="outline">{authorization.mode.toUpperCase()}</Badge>
+                        <Badge
+                          variant={
+                            authorization.status === "authorized"
+                              ? "default"
+                              : "secondary"
+                          }
+                        >
+                          {authorization.status === "authorized"
+                            ? "AUTHORIZED"
+                            : "UNAUTHORIZED"}
+                        </Badge>
                       </div>
                       <div className="mt-4 border-t border-border pt-4">
                         <div className="flex items-center justify-between gap-3">
@@ -184,12 +181,14 @@ export function UserPanel({
                               当前授权状态
                             </p>
                             <p className="mt-1 text-sm text-muted-foreground">
-                              授权状态决定功能是否可执行，到期后会自动按策略降级。
+                              当前只区分已授权和未授权两种状态；已授权时开放全部功能。
                             </p>
                           </div>
                           <Badge
                             variant={
-                              statusBadgeVariantByStatus[authorization.status]
+                              authorization.status === "authorized"
+                                ? "default"
+                                : "secondary"
                             }
                           >
                             {authorization.statusLabel}
@@ -208,7 +207,7 @@ export function UserPanel({
                               {authorization.lastSyncAt ?? "尚未同步"}
                             </span>
                           </div>
-                          {authorization.status !== "active" ? (
+                          {authorization.status !== "authorized" ? (
                             <div className="flex items-center justify-between gap-4">
                               <span className="text-muted-foreground">指纹算法</span>
                               <span className="max-w-[14rem] truncate text-right text-foreground">

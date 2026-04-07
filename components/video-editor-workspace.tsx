@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Clapperboard, GripHorizontal, Pencil, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Clapperboard, Download, GripHorizontal, Pencil, Play, Rows3, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,15 +10,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { PersistedMaterialMarker } from "@/lib/persistence/types";
+import { PersistedMaterialMarker, PersistedProjectClip } from "@/lib/persistence/types";
+import {
+  groupProjectClipsByScriptItem,
+  resolveSelectedProjectClip,
+} from "@/lib/project-clips/sequence";
 
 interface VideoEditorWorkspaceProps {
   mediaTitle?: string;
+  projectName?: string;
+  activeProjectClipId?: string | null;
+  activeProjectScriptItemId?: string | null;
+  projectScriptItemOrder?: string[];
   disabled?: boolean;
   disabledReason?: string | null;
   pendingMarkerTime?: number | null;
   markers?: PersistedMaterialMarker[];
+  projectClips?: PersistedProjectClip[];
+  selectedClipVersionByItemId?: Record<string, string>;
   onCreateMarker?: (content: string) => Promise<void>;
   onUpdateMarker?: (markerId: string, content: string) => Promise<void>;
   onDeleteMarker?: (markerId: string) => Promise<void>;
@@ -26,6 +37,15 @@ interface VideoEditorWorkspaceProps {
   onMarkEditStart?: (time: number) => void;
   onAdjustMarkerTime?: (nextTime: number) => void;
   onSeekToTime?: (time: number) => void;
+  onPreviewProjectClip?: (clip: PersistedProjectClip) => void;
+  onSelectProjectClipVersion?: (scriptItemId: string, clipId: string) => void;
+  onPreviewProjectClipCompilation?: () => void;
+  onExportProjectClipCompilation?: () => void;
+  isPreviewingProjectCompilation?: boolean;
+  isCompilingProjectClips?: boolean;
+  isExportingProjectClips?: boolean;
+  lastExportedCompilationPath?: string | null;
+  onOpenExportDirectory?: () => void;
 }
 
 const formatSeconds = (value: number) => {
@@ -38,10 +58,16 @@ const formatSeconds = (value: number) => {
 
 export function VideoEditorWorkspace({
   mediaTitle,
+  projectName,
+  activeProjectClipId = null,
+  activeProjectScriptItemId = null,
+  projectScriptItemOrder = [],
   disabled = false,
   disabledReason = null,
   pendingMarkerTime = null,
   markers = [],
+  projectClips = [],
+  selectedClipVersionByItemId = {},
   onCreateMarker,
   onUpdateMarker,
   onDeleteMarker,
@@ -49,12 +75,22 @@ export function VideoEditorWorkspace({
   onMarkEditStart,
   onAdjustMarkerTime,
   onSeekToTime,
+  onPreviewProjectClip,
+  onSelectProjectClipVersion,
+  onPreviewProjectClipCompilation,
+  onExportProjectClipCompilation,
+  isPreviewingProjectCompilation = false,
+  isCompilingProjectClips = false,
+  isExportingProjectClips = false,
+  lastExportedCompilationPath = null,
+  onOpenExportDirectory,
 }: VideoEditorWorkspaceProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [markerContent, setMarkerContent] = useState("");
   const [isSavingMarker, setIsSavingMarker] = useState(false);
   const [editingMarkerId, setEditingMarkerId] = useState<string | null>(null);
   const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
+  const activeClipGroupElementRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<{
     pointerId: number;
     startX: number;
@@ -69,6 +105,22 @@ export function VideoEditorWorkspace({
       setEditingMarkerId(null);
     }
   }, [isDialogOpen]);
+
+  const groupedProjectClips = useMemo(
+    () => groupProjectClipsByScriptItem(projectClips, projectScriptItemOrder),
+    [projectClips, projectScriptItemOrder]
+  );
+
+  useEffect(() => {
+    if (!activeProjectScriptItemId) {
+      return;
+    }
+
+    activeClipGroupElementRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [activeProjectScriptItemId]);
 
   const handleOpenCreateDialog = () => {
     if (disabled) {
@@ -152,7 +204,7 @@ export function VideoEditorWorkspace({
     }
   };
 
-  if (!mediaTitle) {
+  if (!mediaTitle && !projectName) {
     return (
       <div className="flex h-full items-center justify-center bg-card px-6">
         <div className="max-w-sm text-center">
@@ -174,7 +226,7 @@ export function VideoEditorWorkspace({
           <p className="mt-1 text-xs text-muted-foreground">
             {disabledReason
               ? `${mediaTitle} · ${disabledReason}`
-              : `${mediaTitle} · 当前已启用素材级标记能力，后续会继续扩展更多素材级与切片级能力。`}
+              : `${mediaTitle ?? projectName ?? "当前项目"} · 当前已启用素材级标记与项目片段产物管理。`}
           </p>
         </div>
         <Button size="sm" onClick={handleOpenCreateDialog} disabled={disabled}>
@@ -183,7 +235,8 @@ export function VideoEditorWorkspace({
       </div>
 
       <div className="min-h-0 flex-1 p-4">
-        <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-background/70">
+        <div className="grid h-full min-h-0 gap-4 lg:grid-cols-2">
+          <div className="flex min-h-0 flex-col rounded-xl border border-border bg-background/70">
           <div className="border-b border-border px-4 py-3">
             <p className="text-sm font-medium text-foreground">标记管理</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -247,6 +300,158 @@ export function VideoEditorWorkspace({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+          <div className="flex min-h-0 flex-col rounded-xl border border-border bg-background/70">
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-foreground">项目片段</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    这里展示和文案条目关联的最终片段产物，不会进入素材库。
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={groupedProjectClips.length === 0 || isCompilingProjectClips}
+                    className={isPreviewingProjectCompilation ? "border-primary/40 text-primary" : ""}
+                    onClick={() => onPreviewProjectClipCompilation?.()}
+                  >
+                    <Rows3 className="mr-1 h-3.5 w-3.5" />
+                    {isCompilingProjectClips
+                      ? "合成中..."
+                      : isPreviewingProjectCompilation
+                        ? "预览中"
+                        : "合成预览"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={groupedProjectClips.length === 0 || isExportingProjectClips}
+                    onClick={() => onExportProjectClipCompilation?.()}
+                  >
+                    <Download className="mr-1 h-3.5 w-3.5" />
+                    {isExportingProjectClips ? "导出中..." : "导出成片"}
+                  </Button>
+                </div>
+              </div>
+              {lastExportedCompilationPath ? (
+                <div className="mt-3 rounded-lg border border-border bg-background/80 px-3 py-2">
+                  <p className="text-[11px] text-muted-foreground">最近导出</p>
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                    <p className="min-w-0 flex-1 truncate text-xs text-foreground">
+                      {lastExportedCompilationPath}
+                    </p>
+                    <Button variant="ghost" size="sm" onClick={onOpenExportDirectory}>
+                      打开目录
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto p-3">
+              {groupedProjectClips.length === 0 ? (
+                <div className="flex h-full min-h-32 items-center justify-center rounded-lg border border-dashed border-border px-6 text-center">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">还没有项目片段</p>
+                    <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                      在左侧文案条目点击“生成片段”后，会直接出现在这里。
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {groupedProjectClips.map((group) => {
+                    const selectedClip = resolveSelectedProjectClip(
+                      group,
+                      selectedClipVersionByItemId
+                    );
+
+                    if (!selectedClip) {
+                      return null;
+                    }
+
+                    const selectedVersionIndex = group.versions.findIndex(
+                      (clip) => clip.id === selectedClip.id
+                    );
+
+                    const isPreviewingSelectedVersion = selectedClip.id === activeProjectClipId;
+                    const isActiveScriptItem =
+                      group.scriptItemId === activeProjectScriptItemId;
+
+                    return (
+                    <div
+                      key={group.scriptItemId}
+                      ref={
+                        isPreviewingSelectedVersion || isActiveScriptItem
+                          ? activeClipGroupElementRef
+                          : undefined
+                      }
+                      className={
+                        "rounded-lg border bg-card px-3 py-3 transition-colors " +
+                        (isPreviewingSelectedVersion || isActiveScriptItem
+                          ? "border-primary/50 bg-primary/5"
+                          : "border-border")
+                      }
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {selectedClip.label}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            关联文案：{group.scriptContent}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            来源：{selectedClip.sourceAssetTitle} · {formatSeconds(selectedClip.sourceStartSeconds)} · 时长 {formatSeconds(selectedClip.durationSeconds)}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Select
+                            value={selectedClip.id}
+                            onValueChange={(value) =>
+                              onSelectProjectClipVersion?.(group.scriptItemId, value)
+                            }
+                          >
+                            <SelectTrigger size="sm" className="w-24">
+                              <SelectValue placeholder="版本" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {group.versions.map((clip, index) => (
+                                <SelectItem key={clip.id} value={clip.id}>
+                                  {`v${group.versions.length - index}`}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={
+                              "shrink-0 " +
+                              (isPreviewingSelectedVersion
+                                ? "border-primary/40 text-primary"
+                                : "")
+                            }
+                            onClick={() => onPreviewProjectClip?.(selectedClip)}
+                          >
+                            <Play className="mr-1 h-3.5 w-3.5" />
+                            {isPreviewingSelectedVersion ? "预览中" : "预览"}
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        当前版本：v{group.versions.length - selectedVersionIndex} · 共 {group.versions.length} 个版本
+                      </p>
+                    </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -348,6 +553,7 @@ export function VideoEditorWorkspace({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }

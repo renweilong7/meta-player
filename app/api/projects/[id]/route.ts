@@ -1,9 +1,27 @@
 import { NextResponse } from "next/server";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
-import { deleteProject, updateProject } from "@/lib/persistence/repository";
+import {
+  deleteProject,
+  getProjectById,
+  updateProject,
+} from "@/lib/persistence/repository";
 import { ProjectUpdateInput } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
+
+export async function GET(
+  _request: Request,
+  context: { params: Promise<{ id: string }> }
+) {
+  const { id } = await context.params;
+  const project = getProjectById(id);
+
+  if (!project) {
+    return NextResponse.json({ message: "项目不存在。" }, { status: 404 });
+  }
+
+  return NextResponse.json(project);
+}
 
 export async function PATCH(
   request: Request,
@@ -19,7 +37,7 @@ export async function PATCH(
       return NextResponse.json({ message: "项目不存在。" }, { status: 404 });
     }
 
-    return NextResponse.json(updated);
+    return NextResponse.json(getProjectById(id) ?? updated);
   } catch (error) {
     if (error instanceof LicenseAccessError) {
       return NextResponse.json({ message: error.message }, { status: 403 });

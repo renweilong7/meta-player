@@ -11,26 +11,64 @@ import {
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { StoryScene } from "@/lib/story-outline/types";
+import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 interface StoryOutlineProps {
   scenes: StoryScene[];
   currentSceneId: string | null;
+  mediaOptions?: Array<{
+    id: string;
+    title: string;
+    outlineSceneCount: number;
+  }>;
+  selectedMediaId?: string | null;
   isExtracting?: boolean;
   extractionError?: string | null;
+  onMediaSelect?: (mediaId: string) => void;
   onSceneSelect: (id: string) => void;
+  searchQuery?: string;
+  searchState?: "idle" | "loading" | "embedding" | "keyword" | "llm";
+  searchResults?: StoryOutlineSearchResult[];
+  currentSearchResultId?: string | null;
+  onSearchResultSelect?: (result: StoryOutlineSearchResult) => void;
 }
 
 export function StoryOutline({
   scenes,
   currentSceneId,
+  mediaOptions = [],
+  selectedMediaId = null,
   isExtracting = false,
   extractionError = null,
+  onMediaSelect,
   onSceneSelect,
+  searchQuery = "",
+  searchState = "idle",
+  searchResults = [],
+  currentSearchResultId = null,
+  onSearchResultSelect,
 }: StoryOutlineProps) {
   const [expandedSceneId, setExpandedSceneId] = useState<string | null>(null);
   const sceneRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const isSearchMode = searchQuery.trim().length > 0 || searchState === "loading";
+  const searchStatusLabel =
+    searchState === "embedding"
+      ? "语义检索"
+      : searchState === "llm"
+        ? "大模型搜索"
+        : searchState === "loading"
+          ? "搜索中"
+          : "关键词检索";
 
   const handleToggleExpanded = (sceneId: string) => {
     setExpandedSceneId((current) => (current === sceneId ? null : sceneId));
@@ -53,13 +91,96 @@ export function StoryOutline({
       <div className="border-b border-border p-4">
         <h2 className="text-sm font-semibold text-card-foreground">剧情大纲</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          共 {scenes.length} 个场景
+          {isSearchMode ? `共 ${searchResults.length} 条搜索结果` : `共 ${scenes.length} 个场景`}
         </p>
+        {!isSearchMode && mediaOptions.length > 0 ? (
+          <div className="mt-3">
+            <Select
+              value={selectedMediaId ?? undefined}
+              onValueChange={(value) => onMediaSelect?.(value)}
+            >
+              <SelectTrigger className="h-9 w-full">
+                <SelectValue placeholder="切换素材查看剧情大纲" />
+              </SelectTrigger>
+              <SelectContent>
+                {mediaOptions.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.title} · {item.outlineSceneCount} 场
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
       </div>
 
       {/* Scene List */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-2">
+          {isSearchMode ? (
+            <>
+              <div className="mb-3 rounded-lg border border-dashed border-border bg-muted/20 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-medium text-foreground">剧情搜索：{searchQuery}</p>
+                  <span className="text-xs text-muted-foreground">{searchStatusLabel}</span>
+                </div>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  点击结果后会自动切到对应素材，并定位到该剧情片段。
+                </p>
+              </div>
+
+              {searchState === "loading" ? (
+                <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+                  <LoaderCircle className="h-6 w-6 animate-spin text-primary" />
+                  <p className="mt-3 text-sm font-medium text-foreground">正在搜索剧情片段</p>
+                </div>
+              ) : searchResults.length === 0 ? (
+                <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
+                  <p className="text-sm font-medium text-foreground">没有匹配的剧情片段</p>
+                  <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
+                    试试更短的关键词，或者先为素材提取剧情大纲。
+                  </p>
+                </div>
+              ) : (
+                searchResults.map((result) => {
+                  return (
+                    <button
+                      key={result.id}
+                      type="button"
+                      onClick={() => onSearchResultSelect?.(result)}
+                      className={cn(
+                        "mb-2 w-full rounded-lg border p-3 text-left transition-colors",
+                        currentSearchResultId === result.id
+                          ? "border-primary/40 bg-secondary"
+                          : "border-border bg-background hover:bg-secondary/50"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-card-foreground">
+                            {result.sceneTitle}
+                          </p>
+                          <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
+                            {result.sceneDescription}
+                          </p>
+                        </div>
+                        <Badge variant="secondary" className="shrink-0">
+                          {searchState === "embedding" || searchState === "llm"
+                            ? result.score.toFixed(3)
+                            : result.score}
+                        </Badge>
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                        <span className="truncate">{result.assetTitle}</span>
+                        <span className="shrink-0">{result.timestamp}</span>
+                      </div>
+                    </button>
+                  );
+                })
+              )}
+            </>
+          ) : (
+            <>
           {isExtracting && (
             <div className="mb-3 rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4">
               <div className="flex items-center gap-2 text-sm font-medium text-foreground">
@@ -194,6 +315,8 @@ export function StoryOutline({
               )}
             </div>
           ))}
+            </>
+          )}
         </div>
       </ScrollArea>
 

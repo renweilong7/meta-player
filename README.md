@@ -134,6 +134,12 @@ Meta Player 当前采用基础授权与高级授权两档能力分层。
 npm install
 ```
 
+如果要启用本地 Embedding 模型推理，还需要准备 Python 依赖：
+
+```bash
+pip install -r requirements-local-embedding.txt
+```
+
 ### 启动开发环境
 
 ```bash
@@ -141,6 +147,29 @@ npm run electron:dev
 ```
 
 这个命令会同时启动 Next.js 开发服务和 Electron 桌面应用。
+
+如果要启用 `sqlite-vec` 本地向量检索，请先把对应平台的动态库放到仓库内：
+
+```text
+bin/sqlite-vec/darwin-arm64/vec0.dylib
+bin/sqlite-vec/darwin-x64/vec0.dylib
+bin/sqlite-vec/linux-x64/vec0.so
+bin/sqlite-vec/win32-x64/vec0.dll
+```
+
+开发环境也可以用环境变量覆盖默认路径：
+
+```bash
+META_PLAYER_SQLITE_VEC_PATH=/absolute/path/to/vec0.dylib npm run electron:dev
+```
+
+项目自带本地 Embedding 模型请放在：
+
+```text
+models/embeddings/<model-name>/
+```
+
+用户自定义模型可放在任意目录，然后在设置页指定“本地 Embedding 模型目录”。应用会扫描该目录下的一级子目录。
 
 ### 构建应用
 
@@ -183,6 +212,8 @@ npm run dist:mac
 - 屏蔽右键上下文菜单
 - 禁止页面打开新窗口
 - 生产环境关闭 `nodeIntegration`，开启 `contextIsolation`
+
+打包时如果仓库内存在 `bin/sqlite-vec/`，会自动把动态库带入应用产物，供本地向量检索使用。
 
 ## 目录结构
 

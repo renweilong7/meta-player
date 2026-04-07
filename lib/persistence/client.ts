@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  LocalEmbeddingModelOption,
   MaterialImportInput,
   MaterialMarkerCreateInput,
   MaterialMarkerUpdateInput,
@@ -9,6 +10,7 @@ import {
   PersistedLibrarySnapshot,
   PersistedMaterial,
   PersistedProject,
+  PersistedProjectClipCompilation,
   ProjectCreateInput,
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
@@ -185,6 +187,24 @@ export const putSettings = async (
   return (await response.json()) as PersistedAppSettings;
 };
 
+export const fetchLocalEmbeddingModels = async (
+  directory?: string
+): Promise<LocalEmbeddingModelOption[]> => {
+  const query = directory !== undefined
+    ? `?directory=${encodeURIComponent(directory)}`
+    : "";
+  const response = await assertOk(
+    await fetch(`/api/settings/local-embedding-models${query}`, {
+      cache: "no-store",
+    })
+  );
+  const payload = (await response.json()) as {
+    models?: LocalEmbeddingModelOption[];
+  };
+
+  return payload.models ?? [];
+};
+
 export const postProject = async (
   input: ProjectCreateInput
 ): Promise<PersistedProject> => {
@@ -212,6 +232,66 @@ export const patchProject = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify(patch),
+    })
+  );
+
+  return (await response.json()) as PersistedProject;
+};
+
+export const uploadProjectAudio = async (
+  projectId: string,
+  input: { file: File; originalPath?: string }
+): Promise<PersistedProject> => {
+  const formData = new FormData();
+  formData.append("file", input.file);
+  formData.append("originalPath", input.originalPath ?? "");
+
+  const response = await assertOk(
+    await fetch(`/api/projects/${projectId}/audio-upload`, {
+      method: "POST",
+      body: formData,
+    })
+  );
+
+  return (await response.json()) as PersistedProject;
+};
+
+export const fetchProject = async (id: string): Promise<PersistedProject> => {
+  const response = await assertOk(
+    await fetch(`/api/projects/${id}`, {
+      cache: "no-store",
+    })
+  );
+
+  return (await response.json()) as PersistedProject;
+};
+
+export const generateProjectScriptItemTts = async (
+  projectId: string,
+  itemId: string
+) => {
+  const response = await assertOk(
+    await fetch(`/api/projects/${projectId}/script-items/${itemId}/tts`, {
+      method: "POST",
+    })
+  );
+
+  return (await response.json()) as PersistedProject["scriptItems"][number];
+};
+
+export const combineProjectScriptItems = async (
+  projectId: string,
+  input: {
+    itemIds: string[];
+  }
+): Promise<PersistedProject> => {
+  const response = await assertOk(
+    await fetch(`/api/projects/${projectId}/script-items/combine`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
     })
   );
 
@@ -267,4 +347,49 @@ export const searchProjectStoryOutline = async (
     mode: "embedding" | "keyword" | "llm";
     results: StoryOutlineSearchResult[];
   };
+};
+
+export const createProjectScriptClip = async (
+  projectId: string,
+  input: {
+    scriptItemId: string;
+    scriptContent: string;
+    assetId: string;
+    startSeconds: number;
+    audioStartSeconds: number;
+    durationSeconds: number;
+    label: string;
+  }
+): Promise<PersistedProject> => {
+  const response = await assertOk(
+    await fetch(`/api/projects/${projectId}/script-clips`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    })
+  );
+
+  return (await response.json()) as PersistedProject;
+};
+
+export const compileProjectClipSequence = async (
+  projectId: string,
+  input: {
+    clipIds: string[];
+    label: string;
+  }
+): Promise<PersistedProjectClipCompilation> => {
+  const response = await assertOk(
+    await fetch(`/api/projects/${projectId}/script-clip-compilations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    })
+  );
+
+  return (await response.json()) as PersistedProjectClipCompilation;
 };

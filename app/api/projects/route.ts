@@ -16,6 +16,9 @@ export async function POST(request: Request) {
     const project = createProject({
       name: body.name,
       description: body.description,
+      storySearchProvider: body.storySearchProvider,
+      embeddingModelSource: body.embeddingModelSource,
+      embeddingModelId: body.embeddingModelId,
     });
 
     return NextResponse.json(project, { status: 201 });

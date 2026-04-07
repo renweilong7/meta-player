@@ -1,21 +1,52 @@
+import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { extname, join } from "node:path";
-import { getDatabase, getDefaultMaterialDirectory } from "@/lib/persistence/database";
 import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { extname, join } from "node:path";
+import {
+  ensureOutlineVectorTable,
+  getDatabase,
+  getDefaultMaterialDirectory,
+  getOutlineVectorTableName,
+  isSqliteVecAvailable,
+  listOutlineVectorTableNames,
+} from "@/lib/persistence/database";
+import {
+  CrossAssetSwitchMode,
   MaterialPatchInput,
+  OutlineVectorSearchSupport,
+  ProjectEmbeddingModelSource,
   PersistedAppSettings,
   PersistedLibrarySnapshot,
   PersistedMaterial,
   PersistedMaterialMarker,
   PersistedProject,
+  PersistedProjectScriptAudio,
+  PersistedProjectClip,
+  PersistedProjectClipCompilation,
+  PersistedProjectScriptMatchResult,
   MaterialMarkerCreateInput,
   MaterialMarkerUpdateInput,
   ProjectCreateInput,
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
 import { StoryOutlineSceneRecord } from "@/lib/story-outline/types";
-import { StoryOutlineSearchSegment } from "@/lib/story-outline/search";
+import {
+  StoryOutlineSearchResult,
+  StoryOutlineSearchSegment,
+} from "@/lib/story-outline/search";
+import { resolveLocalEmbeddingModel } from "@/lib/story-outline/local-embedding";
+import { combineProjectScriptState } from "@/lib/project-script/srt";
 
 const SETTINGS_DEFAULTS: PersistedAppSettings = {
   materialSavePath: getDefaultMaterialDirectory(),
@@ -25,8 +56,12 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   aiModelName: "gpt-4o-mini",
   storySearchProvider: "remote_embedding",
   aiEmbeddingModelName: "text-embedding-3-small",
+  localEmbeddingModelDirectory: "",
   localEmbeddingModelName: "bge-small-zh",
   aiSearchModelName: "gpt-4o-mini",
+  localTtsModelName: "Tingting",
+  autoGenerateProjectScriptTts: true,
+  crossAssetSwitchMode: "frame_hold",
 };
 
 const OUTLINE_PROMPT_VERSION = "v1";
@@ -57,6 +92,19 @@ type ProjectRow = {
   id: string;
   name: string;
   description: string | null;
+  story_search_provider: PersistedProject["storySearchProvider"];
+  embedding_model_source: ProjectEmbeddingModelSource;
+  embedding_model_id: string;
+  embedding_model_locked: number;
+  cross_asset_switch_mode: CrossAssetSwitchMode;
+  auto_trim_intro_outro: number;
+  intro_trim_seconds: number;
+  outro_trim_seconds: number;
+  script_srt_content: string | null;
+  script_match_results_json: string | null;
+  script_audio_filename: string | null;
+  script_audio_path: string | null;
+  script_audio_size: number | null;
   created_at: string;
   updated_at: string;
   material_ids_json: string;
@@ -77,6 +125,49 @@ type OutlineSegmentRow = {
   embedding_model: string | null;
   embedding_status: "idle" | "loading" | "success" | "error";
   embedding_error: string | null;
+  updated_at: string;
+};
+
+type OutlineVectorCandidateRow = {
+  segment_id: string;
+  distance: number;
+};
+
+type OutlineVectorRecord = {
+  projectId: string;
+  assetId: string;
+  segmentId: string;
+  embeddingModel: string;
+  startSeconds: number;
+  embedding: number[];
+};
+
+type ProjectScriptItemRow = {
+  id: string;
+  project_id: string;
+  line_index: number;
+  content: string;
+  audio_path: string | null;
+  tts_status: "idle" | "loading" | "success" | "error";
+  tts_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectClipRow = {
+  id: string;
+  project_id: string;
+  script_item_id: string;
+  script_content: string;
+  label: string;
+  source_asset_id: string;
+  source_asset_title: string;
+  source_start_seconds: number;
+  audio_start_seconds: number;
+  duration_seconds: number;
+  absolute_path: string;
+  file_size: number;
+  created_at: string;
   updated_at: string;
 };
 
@@ -132,6 +223,53 @@ const parseProjectMaterialIds = (raw: string): string[] => {
   }
 };
 
+const parseProjectScriptAudio = (
+  row: Pick<
+    ProjectRow,
+    "script_audio_filename" | "script_audio_path" | "script_audio_size"
+  >
+): PersistedProjectScriptAudio | undefined => {
+  if (
+    !row.script_audio_filename ||
+    !row.script_audio_path ||
+    row.script_audio_size === null
+  ) {
+    return undefined;
+  }
+
+  return {
+    filename: row.script_audio_filename,
+    absolutePath: row.script_audio_path,
+    fileSize: row.script_audio_size,
+  };
+};
+
+const normalizeTrimSeconds = (value: number | undefined) =>
+  Number.isFinite(value) ? Math.max(value ?? 0, 0) : 0;
+
+const parseProjectScriptMatchResults = (
+  raw: string | null
+): Record<string, PersistedProjectScriptMatchResult> | undefined => {
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, PersistedProjectScriptMatchResult>;
+    const entries = Object.entries(parsed).filter(
+      ([key, value]) =>
+        Boolean(key) &&
+        typeof value?.assetId === "string" &&
+        typeof value?.assetTitle === "string" &&
+        typeof value?.startSeconds === "number"
+    );
+
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const parseMarkerJson = (raw: string | null): PersistedMaterialMarker[] | undefined => {
   if (!raw) {
     return undefined;
@@ -173,7 +311,32 @@ const parseEmbeddingJson = (raw: string | null): number[] | undefined => {
   }
 };
 
+const groupOutlineVectorRecordsByDimension = (records: OutlineVectorRecord[]) => {
+  const groups = new Map<number, OutlineVectorRecord[]>();
+
+  for (const record of records) {
+    const dimension = record.embedding.length;
+    const existing = groups.get(dimension);
+
+    if (existing) {
+      existing.push(record);
+      continue;
+    }
+
+    groups.set(dimension, [record]);
+  }
+
+  return groups;
+};
+
 const getMaterialFileUrl = (id: string) => `/api/materials/${id}/file`;
+const getProjectScriptAudioUrl = (projectId: string, itemId: string) =>
+  `/api/projects/${projectId}/script-items/${itemId}/audio`;
+const getProjectClipFileUrl = (projectId: string, clipId: string) =>
+  `/api/projects/${projectId}/script-clips/${clipId}/file`;
+
+const getProjectClipCompilationFileUrl = (projectId: string, compilationId: string) =>
+  `/api/projects/${projectId}/script-clip-compilations/${compilationId}/file`;
 
 const mapRowToMaterial = (row: AssetRow): PersistedMaterial => ({
   id: row.id,
@@ -205,11 +368,106 @@ const mapRowToMaterial = (row: AssetRow): PersistedMaterial => ({
   outlineExtractionError: row.outline_error ?? null,
 });
 
+const mapRowToProjectScriptItem = (
+  row: ProjectScriptItemRow
+): PersistedProject["scriptItems"][number] => ({
+  id: row.id,
+  lineIndex: row.line_index,
+  content: row.content,
+  ttsStatus: row.tts_status,
+  ttsError: row.tts_error ?? null,
+  audioSrc:
+    row.audio_path && row.tts_status === "success"
+      ? getProjectScriptAudioUrl(row.project_id, row.id)
+      : undefined,
+});
+
+const mapRowToProjectClip = (row: ProjectClipRow): PersistedProjectClip => ({
+  id: row.id,
+  scriptItemId: row.script_item_id,
+  scriptContent: row.script_content,
+  label: row.label,
+  sourceAssetId: row.source_asset_id,
+  sourceAssetTitle: row.source_asset_title,
+  sourceStartSeconds: row.source_start_seconds,
+  audioStartSeconds: row.audio_start_seconds,
+  durationSeconds: row.duration_seconds,
+  absolutePath: row.absolute_path,
+  fileSize: row.file_size,
+  src: getProjectClipFileUrl(row.project_id, row.id),
+  createdAt: formatAddedAt(row.created_at),
+  updatedAt: formatAddedAt(row.updated_at),
+});
+
+export function listProjectScriptItemsByProjectId(projectId: string) {
+  const database = getDatabase();
+
+  return database
+    .prepare(`
+      SELECT
+        id,
+        project_id,
+        line_index,
+        content,
+        audio_path,
+        tts_status,
+        tts_error,
+        created_at,
+        updated_at
+      FROM project_script_item
+      WHERE project_id = ?
+      ORDER BY line_index ASC, created_at ASC
+    `)
+    .all(projectId)
+    .map((row) => mapRowToProjectScriptItem(row as ProjectScriptItemRow));
+}
+
+export function listProjectClipsByProjectId(projectId: string) {
+  const database = getDatabase();
+
+  return database
+    .prepare(`
+      SELECT
+        c.id,
+        c.project_id,
+        c.script_item_id,
+        c.script_content,
+        c.label,
+        c.source_asset_id,
+        c.source_asset_title,
+        c.source_start_seconds,
+        c.audio_start_seconds,
+        c.duration_seconds,
+        c.absolute_path,
+        c.file_size,
+        c.created_at,
+        c.updated_at
+      FROM project_clip c
+      WHERE c.project_id = ?
+      ORDER BY c.created_at DESC
+    `)
+    .all(projectId)
+    .map((row) => mapRowToProjectClip(row as ProjectClipRow));
+}
+
 const mapRowToProject = (row: ProjectRow): PersistedProject => ({
   id: row.id,
   name: row.name,
   description: row.description ?? undefined,
   materialIds: parseProjectMaterialIds(row.material_ids_json),
+  storySearchProvider: row.story_search_provider ?? "remote_embedding",
+  embeddingModelSource: row.embedding_model_source ?? "remote",
+  embeddingModelId: row.embedding_model_id,
+  embeddingModelLocked: row.embedding_model_locked === 1,
+  crossAssetSwitchMode: row.cross_asset_switch_mode ?? "frame_hold",
+  autoTrimIntroOutro: row.auto_trim_intro_outro === 1,
+  introTrimSeconds: normalizeTrimSeconds(row.intro_trim_seconds),
+  outroTrimSeconds: normalizeTrimSeconds(row.outro_trim_seconds),
+  scriptSrtContent: row.script_srt_content ?? undefined,
+  scriptMatchResults: parseProjectScriptMatchResults(row.script_match_results_json),
+  scriptAudio: parseProjectScriptAudio(row),
+  scriptItems: listProjectScriptItemsByProjectId(row.id),
+  scriptClips: listProjectClipsByProjectId(row.id),
   createdAt: formatAddedAt(row.created_at),
   updatedAt: formatAddedAt(row.updated_at),
 });
@@ -228,6 +486,7 @@ const mapRowToOutlineSegment = (
   timestamp: row.timestamp_text,
   searchableText: row.searchable_text,
   embedding: parseEmbeddingJson(row.embedding_json),
+  embeddingModel: row.embedding_model,
 });
 
 const ensureDirectory = (directory: string) => {
@@ -249,6 +508,89 @@ const sanitizeExtension = (filename: string) => {
   return extension;
 };
 
+const probeVideoDurationSeconds = (absolutePath: string) => {
+  const stdout = execFileSync("/opt/homebrew/bin/ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+    absolutePath,
+  ], {
+    encoding: "utf8",
+  });
+
+  const durationSeconds = Number(stdout.trim());
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new Error("无法读取视频时长，片头片尾裁剪失败。");
+  }
+
+  return durationSeconds;
+};
+
+const trimImportedVideoBuffer = (input: {
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+  introTrimSeconds: number;
+  outroTrimSeconds: number;
+}) => {
+  const tempDirectory = mkdtempSync(join(tmpdir(), "meta-player-trim-"));
+  const inputExtension = sanitizeExtension(input.filename) || ".mp4";
+  const inputPath = join(tempDirectory, `input${inputExtension}`);
+  const outputPath = join(tempDirectory, "output.mp4");
+
+  try {
+    writeFileSync(inputPath, input.buffer);
+    const durationSeconds = probeVideoDurationSeconds(inputPath);
+    const trimDurationSeconds =
+      durationSeconds - input.introTrimSeconds - input.outroTrimSeconds;
+
+    if (trimDurationSeconds <= 0.1) {
+      throw new Error("片头片尾时长之和不能大于或等于视频总时长。");
+    }
+
+    execFileSync("/opt/homebrew/bin/ffmpeg", [
+      "-y",
+      "-i",
+      inputPath,
+      "-ss",
+      String(input.introTrimSeconds),
+      "-t",
+      String(trimDurationSeconds),
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-c:a",
+      "aac",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ], {
+      stdio: "ignore",
+    });
+
+    return {
+      buffer: readFileSync(outputPath),
+      filename: input.filename.replace(/\.[^.]+$/, "") + ".mp4",
+      mimeType: "video/mp4",
+      forceManagedImport: true,
+    };
+  } finally {
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+};
+
+const parseProjectScriptLines = (raw: string) =>
+  raw
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
 /**
  * `node:sqlite` 目前只有基础同步接口，没有 ORM 那种事务 helper。
  * 这里封一层最小事务执行器，后续所有写操作都复用这一套。
@@ -265,6 +607,216 @@ const runInTransaction = (callback: () => void) => {
     database.exec("ROLLBACK");
     throw error;
   }
+};
+
+const getOutlineVectorSearchSupportInternal = (): OutlineVectorSearchSupport => {
+  if (!isSqliteVecAvailable()) {
+    return {
+      available: false,
+      mode: "keyword_fallback",
+      reason: "sqlite_vec_unavailable",
+    };
+  }
+
+  return {
+    available: true,
+    mode: "sqlite_vec",
+    reason: null,
+  };
+};
+
+const normalizeProjectEmbeddingConfig = (input: {
+  storySearchProvider: PersistedProject["storySearchProvider"];
+  embeddingModelSource: ProjectEmbeddingModelSource;
+  embeddingModelId: string;
+}) => {
+  const embeddingModelId = input.embeddingModelId.trim();
+  if (!embeddingModelId) {
+    throw new Error("项目 Embedding 模型不能为空。");
+  }
+
+  if (input.storySearchProvider === "local_embedding") {
+    const resolved = resolveLocalEmbeddingModel({
+      localEmbeddingModelDirectory: getSettings().localEmbeddingModelDirectory,
+      localEmbeddingModelName: embeddingModelId,
+    });
+
+    return {
+      storySearchProvider: input.storySearchProvider,
+      embeddingModelSource: "local" as const,
+      embeddingModelId: resolved.id,
+    };
+  }
+
+  if (input.storySearchProvider === "remote_embedding") {
+    return {
+      storySearchProvider: input.storySearchProvider,
+      embeddingModelSource: "remote" as const,
+      embeddingModelId,
+    };
+  }
+
+  return {
+    storySearchProvider: input.storySearchProvider,
+    embeddingModelSource: input.embeddingModelSource,
+    embeddingModelId,
+  };
+};
+
+const listProjectIdsByAssetId = (assetId: string) => {
+  const database = getDatabase();
+
+  return (
+    database
+      .prepare(`
+        SELECT project_id
+        FROM project_asset
+        WHERE asset_id = ?
+        ORDER BY project_id ASC
+      `)
+      .all(assetId) as Array<{ project_id: string }>
+  ).map((row) => row.project_id);
+};
+
+export const lockProjectEmbeddingConfigByAssetId = (assetId: string) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+
+  database.prepare(`
+    UPDATE project
+    SET embedding_model_locked = 1,
+        updated_at = ?
+    WHERE id IN (
+      SELECT project_id
+      FROM project_asset
+      WHERE asset_id = ?
+    )
+  `).run(now, assetId);
+};
+
+export const lockProjectEmbeddingConfig = (projectId: string) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+
+  database.prepare(`
+    UPDATE project
+    SET embedding_model_locked = 1,
+        updated_at = ?
+    WHERE id = ?
+  `).run(now, projectId);
+};
+
+const deleteOutlineVectorRowsByColumn = (
+  column: "asset_id" | "project_id",
+  value: string
+) => {
+  if (!isSqliteVecAvailable()) {
+    return;
+  }
+
+  const database = getDatabase();
+
+  for (const tableName of listOutlineVectorTableNames()) {
+    database.prepare(`DELETE FROM ${tableName} WHERE ${column} = ?`).run(value);
+  }
+};
+
+const insertOutlineVectorRecords = (records: OutlineVectorRecord[]) => {
+  if (!isSqliteVecAvailable() || records.length === 0) {
+    return 0;
+  }
+
+  const database = getDatabase();
+  let insertedCount = 0;
+
+  for (const [dimension, groupedRecords] of groupOutlineVectorRecordsByDimension(records)) {
+    ensureOutlineVectorTable(dimension);
+    const tableName = getOutlineVectorTableName(dimension);
+    const insertStatement = database.prepare(`
+      INSERT INTO ${tableName} (
+        project_id,
+        asset_id,
+        segment_id,
+        embedding_model,
+        start_seconds,
+        embedding
+      ) VALUES (?, ?, ?, ?, ?, vec_f32(?))
+    `);
+
+    for (const record of groupedRecords) {
+      insertStatement.run(
+        record.projectId,
+        record.assetId,
+        record.segmentId,
+        record.embeddingModel,
+        record.startSeconds,
+        JSON.stringify(record.embedding)
+      );
+      insertedCount += 1;
+    }
+  }
+
+  return insertedCount;
+};
+
+export const replaceProjectOutlineVectorsForAsset = (input: {
+  projectId: string;
+  assetId: string;
+  embeddingModel: string;
+  segments: Array<{
+    segmentId: string;
+    startSeconds: number;
+    embedding: number[];
+  }>;
+}) => {
+  if (!isSqliteVecAvailable()) {
+    return 0;
+  }
+
+  let insertedCount = 0;
+
+  runInTransaction(() => {
+    const database = getDatabase();
+
+    for (const tableName of listOutlineVectorTableNames()) {
+      database
+        .prepare(
+          `DELETE FROM ${tableName} WHERE project_id = ? AND asset_id = ? AND embedding_model = ?`
+        )
+        .run(input.projectId, input.assetId, input.embeddingModel);
+    }
+
+    insertedCount = insertOutlineVectorRecords(
+      input.segments.map((segment) => ({
+        projectId: input.projectId,
+        assetId: input.assetId,
+        segmentId: segment.segmentId,
+        embeddingModel: input.embeddingModel,
+        startSeconds: segment.startSeconds,
+        embedding: segment.embedding,
+      }))
+    );
+  });
+
+  return insertedCount;
+};
+
+export const countProjectOutlineVectors = (projectId: string, embeddingModel: string) => {
+  if (!isSqliteVecAvailable()) {
+    return 0;
+  }
+
+  const database = getDatabase();
+
+  return listOutlineVectorTableNames().reduce((total, tableName) => {
+    const row = database
+      .prepare(
+        `SELECT COUNT(*) AS count FROM ${tableName} WHERE project_id = ? AND embedding_model = ?`
+      )
+      .get(projectId, embeddingModel) as { count: number };
+
+    return total + row.count;
+  }, 0);
 };
 
 const getMediaTypeFromMime = (mimeType: string, filename: string): "video" | "image" => {
@@ -349,10 +901,21 @@ export const getSettings = (): PersistedAppSettings => {
       SETTINGS_DEFAULTS.storySearchProvider,
     aiEmbeddingModelName:
       stored.get("aiEmbeddingModelName") ?? SETTINGS_DEFAULTS.aiEmbeddingModelName,
+    localEmbeddingModelDirectory:
+      stored.get("localEmbeddingModelDirectory") ??
+      SETTINGS_DEFAULTS.localEmbeddingModelDirectory,
     localEmbeddingModelName:
       stored.get("localEmbeddingModelName") ?? SETTINGS_DEFAULTS.localEmbeddingModelName,
     aiSearchModelName:
       stored.get("aiSearchModelName") ?? SETTINGS_DEFAULTS.aiSearchModelName,
+    localTtsModelName:
+      stored.get("localTtsModelName") ?? SETTINGS_DEFAULTS.localTtsModelName,
+    autoGenerateProjectScriptTts:
+      (stored.get("autoGenerateProjectScriptTts") ??
+        String(SETTINGS_DEFAULTS.autoGenerateProjectScriptTts)) === "true",
+    crossAssetSwitchMode:
+      (stored.get("crossAssetSwitchMode") as PersistedAppSettings["crossAssetSwitchMode"]) ??
+      SETTINGS_DEFAULTS.crossAssetSwitchMode,
   };
 };
 
@@ -365,8 +928,12 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     aiModelName: settings.aiModelName,
     storySearchProvider: settings.storySearchProvider,
     aiEmbeddingModelName: settings.aiEmbeddingModelName,
+    localEmbeddingModelDirectory: settings.localEmbeddingModelDirectory,
     localEmbeddingModelName: settings.localEmbeddingModelName,
     aiSearchModelName: settings.aiSearchModelName,
+    localTtsModelName: settings.localTtsModelName,
+    autoGenerateProjectScriptTts: String(settings.autoGenerateProjectScriptTts),
+    crossAssetSwitchMode: settings.crossAssetSwitchMode,
   });
 
   ensureDirectory(settings.materialSavePath);
@@ -433,6 +1000,19 @@ const listProjectRows = (): ProjectRow[] => {
         p.id,
         p.name,
         p.description,
+        p.story_search_provider,
+        p.embedding_model_source,
+        p.embedding_model_id,
+        p.embedding_model_locked,
+        p.cross_asset_switch_mode,
+        p.auto_trim_intro_outro,
+        p.intro_trim_seconds,
+        p.outro_trim_seconds,
+        p.script_srt_content,
+        p.script_match_results_json,
+        p.script_audio_filename,
+        p.script_audio_path,
+        p.script_audio_size,
         p.created_at,
         p.updated_at,
         COALESCE(
@@ -456,6 +1036,19 @@ const getProjectRowById = (id: string) => {
         p.id,
         p.name,
         p.description,
+        p.story_search_provider,
+        p.embedding_model_source,
+        p.embedding_model_id,
+        p.embedding_model_locked,
+        p.cross_asset_switch_mode,
+        p.auto_trim_intro_outro,
+        p.intro_trim_seconds,
+        p.outro_trim_seconds,
+        p.script_srt_content,
+        p.script_match_results_json,
+        p.script_audio_filename,
+        p.script_audio_path,
+        p.script_audio_size,
         p.created_at,
         p.updated_at,
         COALESCE(
@@ -471,6 +1064,11 @@ const getProjectRowById = (id: string) => {
 };
 
 export const listProjects = (): PersistedProject[] => listProjectRows().map(mapRowToProject);
+
+export const getProjectById = (id: string) => {
+  const row = getProjectRowById(id);
+  return row ? mapRowToProject(row) : null;
+};
 
 export const listMaterialsByProjectId = (projectId: string): PersistedMaterial[] => {
   const database = getDatabase();
@@ -534,6 +1132,13 @@ const ensureDefaultProjectForExistingMaterials = () => {
   const project = createProject({
     name: "默认项目",
     description: "由现有素材自动迁移生成。",
+    storySearchProvider: getSettings().storySearchProvider,
+    embeddingModelSource:
+      getSettings().storySearchProvider === "local_embedding" ? "local" : "remote",
+    embeddingModelId:
+      getSettings().storySearchProvider === "local_embedding"
+        ? getSettings().localEmbeddingModelName
+        : getSettings().aiEmbeddingModelName,
   });
   const updatedProject = updateProject(project.id, {
     materialIds: materials.map((item) => item.id),
@@ -661,11 +1266,32 @@ export const importMaterialFromBuffer = (input: {
   filename: string;
   mimeType: string;
   originalPath?: string;
+  projectImportSettings?: {
+    autoTrimIntroOutro: boolean;
+    introTrimSeconds: number;
+    outroTrimSeconds: number;
+  };
 }) => {
   const database = getDatabase();
   const settings = getSettings();
   const now = toIsoNow();
-  const contentHash = hashBuffer(input.buffer);
+  const mediaType = getMediaTypeFromMime(input.mimeType, input.filename);
+  const processedInput =
+    input.projectImportSettings?.autoTrimIntroOutro && mediaType === "video"
+      ? trimImportedVideoBuffer({
+          buffer: input.buffer,
+          filename: input.filename,
+          mimeType: input.mimeType,
+          introTrimSeconds: normalizeTrimSeconds(input.projectImportSettings.introTrimSeconds),
+          outroTrimSeconds: normalizeTrimSeconds(input.projectImportSettings.outroTrimSeconds),
+        })
+      : {
+          buffer: input.buffer,
+          filename: input.filename,
+          mimeType: input.mimeType,
+          forceManagedImport: false,
+        };
+  const contentHash = hashBuffer(processedInput.buffer);
   const existing = getAssetByContentHash(contentHash);
 
   if (existing) {
@@ -684,15 +1310,16 @@ export const importMaterialFromBuffer = (input: {
   ensureDirectory(settings.materialSavePath);
 
   const assetId = randomUUID();
-  const storedFilename = `${assetId}${sanitizeExtension(input.filename)}`;
+  const storedFilename = `${assetId}${sanitizeExtension(processedInput.filename)}`;
   const normalizedOriginalPath = input.originalPath?.trim();
   const shouldForceManagedImport = settings.defaultManagedImport;
   const hasStableOriginalPath =
-    Boolean(normalizedOriginalPath) && !shouldForceManagedImport;
+    Boolean(normalizedOriginalPath) &&
+    !shouldForceManagedImport &&
+    !processedInput.forceManagedImport;
   const absolutePath = hasStableOriginalPath
     ? normalizedOriginalPath!
     : join(settings.materialSavePath, storedFilename);
-  const mediaType = getMediaTypeFromMime(input.mimeType, input.filename);
   const storageMode: AssetRow["storage_mode"] = hasStableOriginalPath
     ? "referenced"
     : "managed";
@@ -703,7 +1330,7 @@ export const importMaterialFromBuffer = (input: {
    * 如果全局开启了“默认托管导入素材”，则这里会强制走托管路径。
    */
   if (storageMode === "managed") {
-    writeFileSync(absolutePath, input.buffer);
+    writeFileSync(absolutePath, processedInput.buffer);
   }
 
   runInTransaction(() => {
@@ -724,13 +1351,13 @@ export const importMaterialFromBuffer = (input: {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       assetId,
-      input.filename,
+      processedInput.filename,
       input.filename,
       storedFilename,
       absolutePath,
       contentHash,
       storageMode,
-      input.buffer.byteLength,
+      processedInput.buffer.byteLength,
       mediaType,
       "00:00",
       now,
@@ -899,6 +1526,201 @@ export const replaceOutlineSegmentsForAsset = (
   });
 };
 
+export const getOutlineVectorSearchSupport = () => getOutlineVectorSearchSupportInternal();
+
+export const removeOutlineVectorsForAsset = (assetId: string) => {
+  runInTransaction(() => {
+    deleteOutlineVectorRowsByColumn("asset_id", assetId);
+  });
+};
+
+export const syncOutlineVectorsForAsset = (assetId: string) => {
+  const support = getOutlineVectorSearchSupportInternal();
+
+  runInTransaction(() => {
+    deleteOutlineVectorRowsByColumn("asset_id", assetId);
+
+    if (!support.available) {
+      return;
+    }
+
+    const database = getDatabase();
+    const projectIds = listProjectIdsByAssetId(assetId);
+
+    if (projectIds.length === 0) {
+      return;
+    }
+
+    const rows = database
+      .prepare(`
+        SELECT
+          id,
+          asset_id,
+          start_seconds,
+          embedding_model,
+          embedding_json
+        FROM asset_outline_segment
+        WHERE asset_id = ?
+          AND embedding_status = 'success'
+          AND embedding_json IS NOT NULL
+        ORDER BY start_seconds ASC
+      `)
+      .all(assetId) as Array<{
+        id: string;
+        asset_id: string;
+        start_seconds: number;
+        embedding_model: string | null;
+        embedding_json: string | null;
+      }>;
+
+    const vectorRecords = rows.flatMap((row) => {
+      const embedding = parseEmbeddingJson(row.embedding_json);
+
+      if (!embedding || embedding.length === 0) {
+        return [];
+      }
+
+        return projectIds.map((projectId) => ({
+          projectId,
+          assetId: row.asset_id,
+          segmentId: row.id,
+          embeddingModel: row.embedding_model ?? "",
+          startSeconds: row.start_seconds,
+          embedding,
+        }));
+    });
+
+    insertOutlineVectorRecords(vectorRecords);
+  });
+
+  return support;
+};
+
+export const syncOutlineVectorsForProject = (projectId: string) => {
+  const support = getOutlineVectorSearchSupportInternal();
+
+  runInTransaction(() => {
+    deleteOutlineVectorRowsByColumn("project_id", projectId);
+
+    if (!support.available) {
+      return;
+    }
+
+    const database = getDatabase();
+    const rows = database
+      .prepare(`
+        SELECT
+          s.id,
+          s.asset_id,
+          s.start_seconds,
+          s.embedding_model,
+          s.embedding_json
+        FROM asset_outline_segment s
+        INNER JOIN project_asset pa ON pa.asset_id = s.asset_id
+        WHERE pa.project_id = ?
+          AND s.embedding_status = 'success'
+          AND s.embedding_json IS NOT NULL
+        ORDER BY s.start_seconds ASC
+      `)
+      .all(projectId) as Array<{
+        id: string;
+        asset_id: string;
+        start_seconds: number;
+        embedding_model: string | null;
+        embedding_json: string | null;
+      }>;
+
+    const vectorRecords = rows.flatMap((row) => {
+      const embedding = parseEmbeddingJson(row.embedding_json);
+
+      if (!embedding || embedding.length === 0) {
+        return [];
+      }
+
+        return [
+          {
+            projectId,
+            assetId: row.asset_id,
+            segmentId: row.id,
+            embeddingModel: row.embedding_model ?? "",
+            startSeconds: row.start_seconds,
+            embedding,
+          },
+        ];
+    });
+
+    insertOutlineVectorRecords(vectorRecords);
+  });
+
+  return support;
+};
+
+export const searchOutlineSegmentsByVector = (input: {
+  projectId: string;
+  embeddingModel: string;
+  queryEmbedding: number[];
+  limit: number;
+}): StoryOutlineSearchResult[] => {
+  const support = getOutlineVectorSearchSupportInternal();
+  if (!support.available || input.queryEmbedding.length === 0) {
+    return [];
+  }
+
+  const database = getDatabase();
+  const tableName = getOutlineVectorTableName(input.queryEmbedding.length);
+  const existingTables = new Set(listOutlineVectorTableNames());
+
+  if (!existingTables.has(tableName)) {
+    return [];
+  }
+
+  const rows = database
+    .prepare(`
+      WITH vector_matches AS (
+        SELECT
+          segment_id,
+          distance
+        FROM ${tableName}
+        WHERE embedding MATCH vec_f32(?)
+          AND k = ?
+          AND project_id = ?
+          AND embedding_model = ?
+      )
+      SELECT
+        s.id,
+        s.asset_id,
+        a.title AS asset_title,
+        s.scene_id,
+        s.scene_title,
+        s.scene_description,
+        s.start_seconds,
+        s.end_seconds,
+        s.timestamp_text,
+        s.searchable_text,
+        s.embedding_json,
+        vm.distance
+      FROM vector_matches vm
+      INNER JOIN asset_outline_segment s ON s.id = vm.segment_id
+      INNER JOIN asset a ON a.id = s.asset_id
+      ORDER BY vm.distance ASC, s.start_seconds ASC
+    `)
+    .all(
+      JSON.stringify(input.queryEmbedding),
+      Math.max(1, input.limit),
+      input.projectId,
+      input.embeddingModel
+    ) as Array<
+      OutlineSegmentRow & {
+        distance: number;
+      }
+    >;
+
+  return rows.map((row) => ({
+    ...mapRowToOutlineSegment(row),
+    score: Math.max(0, 1 - row.distance),
+  }));
+};
+
 export const listOutlineSegmentsByProjectId = (
   projectId: string
 ): StoryOutlineSearchSegment[] => {
@@ -1059,6 +1881,8 @@ export const deleteMaterial = (id: string) => {
   const now = toIsoNow();
 
   runInTransaction(() => {
+    deleteOutlineVectorRowsByColumn("asset_id", id);
+
     database.prepare(`
       UPDATE project
       SET updated_at = ?
@@ -1119,6 +1943,11 @@ const replaceProjectMaterialIds = (projectId: string, materialIds: string[], now
 export const createProject = (input: ProjectCreateInput) => {
   const database = getDatabase();
   const normalizedName = input.name.trim();
+  const embeddingConfig = normalizeProjectEmbeddingConfig({
+    storySearchProvider: input.storySearchProvider,
+    embeddingModelSource: input.embeddingModelSource,
+    embeddingModelId: input.embeddingModelId,
+  });
 
   if (!normalizedName) {
     throw new Error("项目名称不能为空。");
@@ -1128,9 +1957,37 @@ export const createProject = (input: ProjectCreateInput) => {
   const now = toIsoNow();
 
   database.prepare(`
-    INSERT INTO project (id, name, description, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(projectId, normalizedName, input.description?.trim() || null, now, now);
+    INSERT INTO project (
+      id,
+      name,
+      description,
+      story_search_provider,
+      embedding_model_source,
+      embedding_model_id,
+      embedding_model_locked,
+      cross_asset_switch_mode,
+      auto_trim_intro_outro,
+      intro_trim_seconds,
+      outro_trim_seconds,
+      script_srt_content,
+      script_match_results_json,
+      script_audio_filename,
+      script_audio_path,
+      script_audio_size,
+      created_at,
+      updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 0, 'frame_hold', 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+  `).run(
+    projectId,
+    normalizedName,
+    input.description?.trim() || null,
+    embeddingConfig.storySearchProvider,
+    embeddingConfig.embeddingModelSource,
+    embeddingConfig.embeddingModelId,
+    now,
+    now
+  );
 
   const created = getProjectRowById(projectId);
   if (!created) {
@@ -1156,19 +2013,112 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
       : current.description;
   const nextMaterialIds =
     input.materialIds !== undefined ? input.materialIds : currentProject.materialIds;
+  const nextStorySearchProvider =
+    input.storySearchProvider !== undefined
+      ? input.storySearchProvider
+      : currentProject.storySearchProvider;
+  const nextEmbeddingModelSource =
+    input.embeddingModelSource !== undefined
+      ? input.embeddingModelSource
+      : currentProject.embeddingModelSource;
+  const nextEmbeddingModelId =
+    input.embeddingModelId !== undefined
+      ? input.embeddingModelId
+      : currentProject.embeddingModelId;
+  const nextCrossAssetSwitchMode =
+    input.crossAssetSwitchMode !== undefined
+      ? input.crossAssetSwitchMode
+      : current.cross_asset_switch_mode;
+  const nextAutoTrimIntroOutro =
+    input.autoTrimIntroOutro !== undefined
+      ? input.autoTrimIntroOutro
+      : current.auto_trim_intro_outro === 1;
+  const nextIntroTrimSeconds =
+    input.introTrimSeconds !== undefined
+      ? normalizeTrimSeconds(input.introTrimSeconds)
+      : normalizeTrimSeconds(current.intro_trim_seconds);
+  const nextOutroTrimSeconds =
+    input.outroTrimSeconds !== undefined
+      ? normalizeTrimSeconds(input.outroTrimSeconds)
+      : normalizeTrimSeconds(current.outro_trim_seconds);
+  const nextScriptSrtContent =
+    input.scriptSrtContent !== undefined
+      ? input.scriptSrtContent.trim() || null
+      : current.script_srt_content;
+  const nextScriptMatchResults =
+    input.scriptMatchResults !== undefined
+      ? Object.keys(input.scriptMatchResults).length > 0
+        ? JSON.stringify(input.scriptMatchResults)
+        : null
+      : current.script_match_results_json;
+  const nextScriptAudio =
+    input.scriptAudio !== undefined
+      ? input.scriptAudio
+      : parseProjectScriptAudio(current) ?? null;
   const now = toIsoNow();
 
   if (!nextName) {
     throw new Error("项目名称不能为空。");
   }
 
+  const normalizedEmbeddingConfig = normalizeProjectEmbeddingConfig({
+    storySearchProvider: nextStorySearchProvider,
+    embeddingModelSource: nextEmbeddingModelSource,
+    embeddingModelId: nextEmbeddingModelId,
+  });
+  const embeddingConfigChanged =
+    normalizedEmbeddingConfig.storySearchProvider !== currentProject.storySearchProvider ||
+    normalizedEmbeddingConfig.embeddingModelSource !== currentProject.embeddingModelSource ||
+    normalizedEmbeddingConfig.embeddingModelId !== currentProject.embeddingModelId;
+
+  if (currentProject.embeddingModelLocked && embeddingConfigChanged) {
+    throw new Error("项目已经生成过向量索引，不能修改 Embedding 模型。请重建项目。");
+  }
+
   runInTransaction(() => {
     database
-      .prepare("UPDATE project SET name = ?, description = ?, updated_at = ? WHERE id = ?")
-      .run(nextName, nextDescription, now, id);
+      .prepare(`
+        UPDATE project
+        SET
+          name = ?,
+          description = ?,
+          story_search_provider = ?,
+          embedding_model_source = ?,
+          embedding_model_id = ?,
+          cross_asset_switch_mode = ?,
+          auto_trim_intro_outro = ?,
+          intro_trim_seconds = ?,
+          outro_trim_seconds = ?,
+          script_srt_content = ?,
+          script_match_results_json = ?,
+          script_audio_filename = ?,
+          script_audio_path = ?,
+          script_audio_size = ?,
+          updated_at = ?
+        WHERE id = ?
+      `)
+      .run(
+        nextName,
+        nextDescription,
+        normalizedEmbeddingConfig.storySearchProvider,
+        normalizedEmbeddingConfig.embeddingModelSource,
+        normalizedEmbeddingConfig.embeddingModelId,
+        nextCrossAssetSwitchMode,
+        nextAutoTrimIntroOutro ? 1 : 0,
+        nextIntroTrimSeconds,
+        nextOutroTrimSeconds,
+        nextScriptSrtContent,
+        nextScriptMatchResults,
+        nextScriptAudio?.filename ?? null,
+        nextScriptAudio?.absolutePath ?? null,
+        nextScriptAudio?.fileSize ?? null,
+        now,
+        id
+      );
 
     if (input.materialIds !== undefined) {
       replaceProjectMaterialIds(id, nextMaterialIds, now);
+      deleteOutlineVectorRowsByColumn("project_id", id);
     }
   });
 
@@ -1178,6 +2128,201 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
   }
 
   return mapRowToProject(updated);
+};
+
+export const replaceProjectScriptItems = (projectId: string, rawContent: string) => {
+  const database = getDatabase();
+  const settings = getSettings();
+  const now = toIsoNow();
+  const lines = parseProjectScriptLines(rawContent);
+  const outputDirectory = join(settings.materialSavePath, "project-script-tts", projectId);
+
+  if (existsSync(outputDirectory)) {
+    rmSync(outputDirectory, { recursive: true, force: true });
+  }
+
+  runInTransaction(() => {
+    database
+      .prepare("DELETE FROM project_script_item WHERE project_id = ?")
+      .run(projectId);
+
+    if (lines.length === 0) {
+      return;
+    }
+
+    const statement = database.prepare(`
+      INSERT INTO project_script_item (
+        id,
+        project_id,
+        line_index,
+        content,
+        audio_path,
+        tts_status,
+        tts_error,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, NULL, 'idle', NULL, ?, ?)
+    `);
+
+    lines.forEach((content, index) => {
+      statement.run(randomUUID(), projectId, index, content, now, now);
+    });
+  });
+
+  return listProjectScriptItemsByProjectId(projectId);
+};
+
+export const getProjectScriptItemById = (itemId: string) => {
+  const database = getDatabase();
+
+  const row = database
+    .prepare(`
+      SELECT
+        id,
+        project_id,
+        line_index,
+        content,
+        audio_path,
+        tts_status,
+        tts_error,
+        created_at,
+        updated_at
+      FROM project_script_item
+      WHERE id = ?
+    `)
+    .get(itemId) as ProjectScriptItemRow | undefined;
+
+  return row ?? null;
+};
+
+export const updateProjectScriptItemTts = (
+  itemId: string,
+  patch: {
+    audioPath?: string | null;
+    ttsStatus: ProjectScriptItemRow["tts_status"];
+    ttsError?: string | null;
+  }
+) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+
+  database
+    .prepare(`
+      UPDATE project_script_item
+      SET
+        audio_path = ?,
+        tts_status = ?,
+        tts_error = ?,
+        updated_at = ?
+      WHERE id = ?
+    `)
+    .run(
+      patch.audioPath ?? null,
+      patch.ttsStatus,
+      patch.ttsError ?? null,
+      now,
+      itemId
+    );
+
+  return getProjectScriptItemById(itemId);
+};
+
+export const combineProjectScriptItems = (
+  projectId: string,
+  input: {
+    itemIds: string[];
+  }
+) => {
+  const project = getProjectById(projectId);
+  if (!project?.scriptSrtContent?.trim()) {
+    throw new Error("当前项目还没有可组合的脚本文案。");
+  }
+
+  const combinedState = combineProjectScriptState({
+    rawContent: project.scriptSrtContent,
+    scriptMatchResults: project.scriptMatchResults,
+    itemIds: input.itemIds,
+  });
+
+  if (!combinedState) {
+    throw new Error("只能组合连续选中的文案。");
+  }
+
+  const database = getDatabase();
+  const now = toIsoNow();
+  const firstItemId = input.itemIds[0];
+  const removedItemIds = input.itemIds.slice(1);
+
+  runInTransaction(() => {
+    database
+      .prepare(`
+        UPDATE project
+        SET
+          script_srt_content = ?,
+          script_match_results_json = ?,
+          updated_at = ?
+        WHERE id = ?
+      `)
+      .run(
+        combinedState.scriptSrtContent,
+        Object.keys(combinedState.scriptMatchResults).length > 0
+          ? JSON.stringify(combinedState.scriptMatchResults)
+          : null,
+        now,
+        projectId
+      );
+
+    database
+      .prepare(`
+        UPDATE project_clip
+        SET
+          script_item_id = ?,
+          script_content = ?,
+          updated_at = ?
+        WHERE project_id = ? AND script_item_id = ?
+      `)
+      .run(
+        combinedState.combinedItemId,
+        combinedState.combinedContent,
+        now,
+        projectId,
+        firstItemId
+      );
+
+    const deleteProjectClipStatement = database.prepare(`
+      DELETE FROM project_clip
+      WHERE project_id = ? AND script_item_id = ?
+    `);
+
+    removedItemIds.forEach((itemId) => {
+      deleteProjectClipStatement.run(projectId, itemId);
+    });
+
+    Object.entries(combinedState.itemIdMap).forEach(([previousItemId, nextItemId]) => {
+      if (
+        !nextItemId ||
+        previousItemId === firstItemId ||
+        removedItemIds.includes(previousItemId) ||
+        previousItemId === nextItemId
+      ) {
+        return;
+      }
+
+      database
+        .prepare(`
+          UPDATE project_clip
+          SET
+            script_item_id = ?,
+            updated_at = ?
+          WHERE project_id = ? AND script_item_id = ?
+        `)
+        .run(nextItemId, now, projectId, previousItemId);
+    });
+  });
+
+  replaceProjectScriptItems(projectId, combinedState.scriptSrtContent);
+
+  return getProjectById(projectId);
 };
 
 export const appendMaterialsToProject = (projectId: string, materialIds: string[]) => {
@@ -1194,8 +2339,258 @@ export const appendMaterialsToProject = (projectId: string, materialIds: string[
   });
 };
 
+const sanitizeClipLabel = (value: string) =>
+  value
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 24) || "片段";
+
+const escapeFfmpegConcatPath = (value: string) => value.replace(/'/g, "'\\''");
+
+const getProjectClipCompilationDirectory = (projectId: string) => {
+  const settings = getSettings();
+  return join(settings.materialSavePath, "project-clip-compilations", projectId);
+};
+
+const getProjectClipCompilationFileDescriptor = (
+  projectId: string,
+  compilationId: string
+) => {
+  const directory = getProjectClipCompilationDirectory(projectId);
+  if (!existsSync(directory)) {
+    return null;
+  }
+
+  const filename = readdirSync(directory).find((item) =>
+    item.startsWith(`${compilationId}-`)
+  );
+
+  if (!filename) {
+    return null;
+  }
+
+  return {
+    filename,
+    absolutePath: join(directory, filename),
+  };
+};
+
+export const createProjectScriptClip = (input: {
+  projectId: string;
+  scriptItemId: string;
+  scriptContent: string;
+  assetId: string;
+  startSeconds: number;
+  audioStartSeconds: number;
+  durationSeconds: number;
+  label: string;
+}) => {
+  const project = getProjectById(input.projectId);
+  if (!project) {
+    throw new Error("项目不存在。");
+  }
+
+  const material = getMaterialById(input.assetId);
+  if (!material || material.mediaType !== "video" || !material.absolutePath) {
+    throw new Error("当前素材不是可裁剪的视频。");
+  }
+
+  if (!project.scriptAudio?.absolutePath) {
+    throw new Error("请先导入项目音频。");
+  }
+
+  const durationSeconds = Math.max(input.durationSeconds, 0);
+  if (durationSeconds <= 0) {
+    throw new Error("当前文案条目没有有效音频时长，无法生成片段。");
+  }
+
+  const tempDirectory = mkdtempSync(join(tmpdir(), "meta-player-script-clip-"));
+  const outputPath = join(tempDirectory, "clip.mp4");
+
+  try {
+    execFileSync("/opt/homebrew/bin/ffmpeg", [
+      "-y",
+      "-ss",
+      String(Math.max(input.startSeconds, 0)),
+      "-t",
+      String(durationSeconds),
+      "-i",
+      material.absolutePath,
+      "-ss",
+      String(Math.max(input.audioStartSeconds, 0)),
+      "-t",
+      String(durationSeconds),
+      "-i",
+      project.scriptAudio.absolutePath,
+      "-map",
+      "0:v:0",
+      "-map",
+      "1:a:0",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-c:a",
+      "aac",
+      "-shortest",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ], {
+      stdio: "ignore",
+    });
+
+    const settings = getSettings();
+    const projectClipDirectory = join(settings.materialSavePath, "project-clips");
+    ensureDirectory(projectClipDirectory);
+    const clipId = randomUUID();
+    const storedFilename = `${clipId}-${sanitizeClipLabel(input.label)}.mp4`;
+    const storedAbsolutePath = join(projectClipDirectory, storedFilename);
+    copyFileSync(outputPath, storedAbsolutePath);
+
+    const stats = statSync(storedAbsolutePath);
+    const now = toIsoNow();
+    getDatabase()
+      .prepare(`
+        INSERT INTO project_clip (
+          id,
+          project_id,
+          script_item_id,
+          script_content,
+          label,
+          source_asset_id,
+          source_asset_title,
+          source_start_seconds,
+          audio_start_seconds,
+          duration_seconds,
+          absolute_path,
+          file_size,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        clipId,
+        input.projectId,
+        input.scriptItemId,
+        input.scriptContent.trim(),
+        sanitizeClipLabel(input.label),
+        input.assetId,
+        material.title,
+        Math.max(input.startSeconds, 0),
+        Math.max(input.audioStartSeconds, 0),
+        durationSeconds,
+        storedAbsolutePath,
+        stats.size,
+        now,
+        now
+      );
+
+    return getProjectById(input.projectId);
+  } finally {
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+};
+
+export const compileProjectClips = (input: {
+  projectId: string;
+  clipIds: string[];
+  label: string;
+}): PersistedProjectClipCompilation => {
+  const project = getProjectById(input.projectId);
+  if (!project) {
+    throw new Error("项目不存在。");
+  }
+
+  const normalizedClipIds = input.clipIds.filter(Boolean);
+  if (normalizedClipIds.length === 0) {
+    throw new Error("当前没有可合成的项目片段。");
+  }
+
+  const clipMap = new Map(project.scriptClips.map((clip) => [clip.id, clip]));
+  const clips = normalizedClipIds.map((clipId) => {
+    const clip = clipMap.get(clipId);
+    if (!clip) {
+      throw new Error("存在无效的项目片段，无法完成合成。");
+    }
+
+    if (!existsSync(clip.absolutePath)) {
+      throw new Error(`片段文件不存在：${clip.label}`);
+    }
+
+    return clip;
+  });
+
+  const tempDirectory = mkdtempSync(join(tmpdir(), "meta-player-clip-compilation-"));
+  const concatListPath = join(tempDirectory, "concat.txt");
+  const tempOutputPath = join(tempDirectory, "compilation.mp4");
+
+  try {
+    writeFileSync(
+      concatListPath,
+      clips
+        .map((clip) => `file '${escapeFfmpegConcatPath(clip.absolutePath)}'`)
+        .join("\n"),
+      "utf8"
+    );
+
+    execFileSync(
+      "/opt/homebrew/bin/ffmpeg",
+      [
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        concatListPath,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        tempOutputPath,
+      ],
+      {
+        stdio: "ignore",
+      }
+    );
+
+    const compilationId = randomUUID();
+    const safeLabel = sanitizeClipLabel(input.label);
+    const compilationDirectory = getProjectClipCompilationDirectory(input.projectId);
+    ensureDirectory(compilationDirectory);
+    const filename = `${compilationId}-${safeLabel}.mp4`;
+    const absolutePath = join(compilationDirectory, filename);
+    copyFileSync(tempOutputPath, absolutePath);
+
+    const stats = statSync(absolutePath);
+    return {
+      id: compilationId,
+      label: safeLabel,
+      filename,
+      fileSize: stats.size,
+      absolutePath,
+      src: getProjectClipCompilationFileUrl(input.projectId, compilationId),
+      createdAt: formatAddedAt(toIsoNow()),
+    };
+  } finally {
+    rmSync(tempDirectory, { recursive: true, force: true });
+  }
+};
+
+export const getProjectClipCompilationFileById = (
+  projectId: string,
+  compilationId: string
+) => getProjectClipCompilationFileDescriptor(projectId, compilationId);
+
 export const deleteProject = (id: string) => {
   const database = getDatabase();
+  deleteOutlineVectorRowsByColumn("project_id", id);
   const result = database.prepare("DELETE FROM project WHERE id = ?").run(id);
 
   return result.changes > 0;

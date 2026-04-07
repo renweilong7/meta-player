@@ -1,6 +1,6 @@
-const { app, BrowserWindow, Menu } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { existsSync, mkdirSync, writeFileSync } = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
@@ -107,6 +107,7 @@ const createWindow = async () => {
       nodeIntegration: isDev,
       contextIsolation: !isDev,
       devTools: isDev,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
 
@@ -129,6 +130,58 @@ app.whenReady().then(() => {
   if (!isDev) {
     Menu.setApplicationMenu(null);
   }
+
+  ipcMain.handle("meta-player:choose-export-path", async (_event, defaultPath) => {
+    const browserWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showSaveDialog(browserWindow ?? undefined, {
+      title: "导出成片",
+      defaultPath: typeof defaultPath === "string" && defaultPath.trim() ? defaultPath : undefined,
+      filters: [
+        { name: "MP4 视频", extensions: ["mp4"] },
+        { name: "所有文件", extensions: ["*"] },
+      ],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return null;
+    }
+
+    return result.filePath;
+  });
+
+  ipcMain.handle("meta-player:choose-directory", async (_event, defaultPath) => {
+    const browserWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(browserWindow ?? undefined, {
+      title: "选择目录",
+      defaultPath: typeof defaultPath === "string" && defaultPath.trim() ? defaultPath : undefined,
+      properties: ["openDirectory", "createDirectory"],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle("meta-player:open-path", async (_event, targetPath) => {
+    if (typeof targetPath !== "string" || !targetPath.trim()) {
+      return "";
+    }
+
+    return shell.showItemInFolder(targetPath);
+  });
+
+  ipcMain.handle("meta-player:save-file", async (_event, targetPath, bytes) => {
+    if (typeof targetPath !== "string" || !targetPath.trim()) {
+      throw new Error("缺少导出路径。");
+    }
+
+    const parentDirectory = path.dirname(targetPath);
+    mkdirSync(parentDirectory, { recursive: true });
+    writeFileSync(targetPath, Buffer.from(bytes));
+    return targetPath;
+  });
 
   void createWindow();
 

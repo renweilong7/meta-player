@@ -5,6 +5,10 @@ export type StorySearchProvider =
   | "local_embedding"
   | "llm";
 
+export type ProjectEmbeddingModelSource = "remote" | "local";
+
+export type CrossAssetSwitchMode = "frame_hold" | "preload";
+
 /**
  * 持久化层的应用设置。
  *
@@ -20,8 +24,26 @@ export interface PersistedAppSettings {
   aiModelName: string;
   storySearchProvider: StorySearchProvider;
   aiEmbeddingModelName: string;
+  localEmbeddingModelDirectory: string;
   localEmbeddingModelName: string;
   aiSearchModelName: string;
+  localTtsModelName: string;
+  autoGenerateProjectScriptTts: boolean;
+  crossAssetSwitchMode: CrossAssetSwitchMode;
+}
+
+export interface OutlineVectorSearchSupport {
+  available: boolean;
+  mode: "sqlite_vec" | "keyword_fallback";
+  reason: "sqlite_vec_unavailable" | null;
+}
+
+export interface LocalEmbeddingModelOption {
+  id: string;
+  name: string;
+  directoryName: string;
+  absolutePath: string;
+  source: "bundled" | "custom";
 }
 
 /**
@@ -61,11 +83,74 @@ export interface PersistedMaterialMarker {
   updatedAt: string;
 }
 
+export interface PersistedProjectScriptAudio {
+  filename: string;
+  absolutePath: string;
+  fileSize: number;
+}
+
+export interface PersistedProjectScriptMatchResult {
+  assetId: string;
+  assetTitle: string;
+  startSeconds: number;
+}
+
+export type ProjectScriptTtsStatus = "idle" | "loading" | "success" | "error";
+
+export interface PersistedProjectScriptItem {
+  id: string;
+  lineIndex: number;
+  content: string;
+  ttsStatus: ProjectScriptTtsStatus;
+  ttsError?: string | null;
+  audioSrc?: string;
+}
+
+export interface PersistedProjectClip {
+  id: string;
+  scriptItemId: string;
+  scriptContent: string;
+  label: string;
+  sourceAssetId: string;
+  sourceAssetTitle: string;
+  sourceStartSeconds: number;
+  audioStartSeconds: number;
+  durationSeconds: number;
+  absolutePath: string;
+  fileSize: number;
+  src: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersistedProjectClipCompilation {
+  id: string;
+  label: string;
+  filename: string;
+  fileSize: number;
+  absolutePath: string;
+  src: string;
+  createdAt: string;
+}
+
 export interface PersistedProject {
   id: string;
   name: string;
   description?: string;
   materialIds: string[];
+  storySearchProvider: StorySearchProvider;
+  embeddingModelSource: ProjectEmbeddingModelSource;
+  embeddingModelId: string;
+  embeddingModelLocked: boolean;
+  crossAssetSwitchMode?: CrossAssetSwitchMode;
+  autoTrimIntroOutro?: boolean;
+  introTrimSeconds?: number;
+  outroTrimSeconds?: number;
+  scriptSrtContent?: string;
+  scriptAudio?: PersistedProjectScriptAudio;
+  scriptMatchResults?: Record<string, PersistedProjectScriptMatchResult>;
+  scriptItems: PersistedProjectScriptItem[];
+  scriptClips: PersistedProjectClip[];
   createdAt: string;
   updatedAt: string;
 }
@@ -108,10 +193,23 @@ export interface MaterialImportInput {
 export interface ProjectCreateInput {
   name: string;
   description?: string;
+  storySearchProvider: StorySearchProvider;
+  embeddingModelSource: ProjectEmbeddingModelSource;
+  embeddingModelId: string;
 }
 
 export interface ProjectUpdateInput {
   name?: string;
   description?: string;
+  storySearchProvider?: StorySearchProvider;
+  embeddingModelSource?: ProjectEmbeddingModelSource;
+  embeddingModelId?: string;
   materialIds?: string[];
+  crossAssetSwitchMode?: CrossAssetSwitchMode;
+  autoTrimIntroOutro?: boolean;
+  introTrimSeconds?: number;
+  outroTrimSeconds?: number;
+  scriptSrtContent?: string;
+  scriptAudio?: PersistedProjectScriptAudio | null;
+  scriptMatchResults?: Record<string, PersistedProjectScriptMatchResult>;
 }

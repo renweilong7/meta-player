@@ -7,11 +7,16 @@ import {
   Plus,
   MoreVertical,
   Play,
+  Pause,
+  Check,
   FileText,
   FileUp,
   ListTree,
   LoaderCircle,
   Trash2,
+  Music4,
+  Captions,
+  Link2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -31,18 +36,19 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PersistedMaterialMarker } from "@/lib/persistence/types";
+import {
+  PersistedMaterialMarker,
+  PersistedProjectScriptAudio,
+  PersistedProjectScriptMatchResult,
+} from "@/lib/persistence/types";
 import {
   OutlineExtractionStatus,
   StoryOutlineSceneRecord,
 } from "@/lib/story-outline/types";
-import {
-  buildStoryOutlineSearchSegments,
-  StoryOutlineSearchResult,
-} from "@/lib/story-outline/search";
+import { parseProjectScriptBlocks } from "@/lib/project-script/srt";
 
 export interface MediaItem {
   id: string;
@@ -64,6 +70,13 @@ interface MediaLibraryProps {
   items: MediaItem[];
   selectedId: string | null;
   projectName?: string | null;
+  projectId?: string | null;
+  activeProjectScriptItemId?: string | null;
+  projectScriptSrtContent?: string;
+  projectScriptAudio?: PersistedProjectScriptAudio;
+  projectScriptMatchResults?: Record<string, PersistedProjectScriptMatchResult>;
+  muteVideoDuringScriptPlayback?: boolean;
+  onMuteVideoDuringScriptPlaybackChange?: (nextValue: boolean) => void;
   canManageMaterials?: boolean;
   canUseOutlineBasic?: boolean;
   canUseOutlineSearch?: boolean;
@@ -72,20 +85,93 @@ interface MediaLibraryProps {
   onAddMaterials?: (files: File[]) => void | Promise<void>;
   onDeleteItem?: (id: string) => void | Promise<void>;
   onExtractOutline?: (id: string) => void | Promise<void>;
-  onSelectOutlineSearchResult?: (result: StoryOutlineSearchResult) => void;
-  onSearchOutline?: (query: string) => Promise<{
-    mode: "embedding" | "keyword" | "llm";
-    results: StoryOutlineSearchResult[];
-  }>;
+  onUpdateProjectScript?: (updates: {
+    scriptSrtContent?: string;
+    scriptAudio?: PersistedProjectScriptAudio | null;
+  }) => void | Promise<void>;
+  onUploadProjectAudio?: (file: File) => void | Promise<void>;
+  onCombineProjectScriptItems?: (input: {
+    itemIds: string[];
+  }) => void | Promise<void>;
+  onActivateProjectScriptItem?: (itemId: string) => void;
+  onMatchProjectScriptItem?: (item: {
+    id: string;
+    content: string;
+  }) => Promise<
+    | {
+        assetId: string;
+        assetTitle: string;
+        startSeconds: number;
+      }
+    | null
+  >;
+  onOffsetProjectScriptWindow?: (input: {
+    itemId: string;
+    offsetSeconds: number;
+    anchorSeconds: number;
+  }) => {
+    assetId: string;
+    assetTitle: string;
+    startSeconds: number;
+  } | null;
+  onLocateProjectScriptItem?: (item: {
+    itemId: string;
+    assetId: string;
+    startSeconds: number;
+  }) => void;
+  onPrefetchProjectScriptItem?: (item: {
+    assetId: string;
+    startSeconds: number;
+  } | null) => void;
+  onCreateProjectScriptClip?: (item: {
+    scriptItemId: string;
+    scriptContent: string;
+    content: string;
+    audioStartSeconds: number;
+    durationSeconds: number;
+  }) => Promise<void>;
+  onPlayProjectScriptSegment?: (item: {
+    itemId: string;
+    videoAssetId: string | null;
+    audioStartSeconds: number;
+    videoStartSeconds: number;
+    audioEndSeconds: number | null;
+    durationSeconds: number;
+  }) => void;
+  onStopProjectScriptSegment?: () => void;
 }
 
 type DialogType = "synopsis" | "srt" | null;
 type SearchMode = "materials" | "outline";
+type ScriptLineItem = ReturnType<typeof parseProjectScriptBlocks>[number];
+type ScriptLineMatchState = {
+  assetId: string;
+  assetTitle: string;
+  startSeconds: number;
+  status: "matched" | "matching" | "error";
+  message?: string;
+};
+
+const formatSecondsToTimecode = (value: number) => {
+  const safeValue = Math.max(Math.floor(value), 0);
+  const hours = Math.floor(safeValue / 3600);
+  const minutes = Math.floor((safeValue % 3600) / 60);
+  const seconds = safeValue % 60;
+
+  return [hours, minutes, seconds]
+    .map((item) => item.toString().padStart(2, "0"))
+    .join(":");
+};
 
 export function MediaLibrary({
   items,
   selectedId,
   projectName = null,
+  projectId = null,
+  activeProjectScriptItemId = null,
+  projectScriptSrtContent,
+  projectScriptAudio,
+  projectScriptMatchResults,
   canManageMaterials = true,
   canUseOutlineBasic = true,
   canUseOutlineSearch = true,
@@ -94,14 +180,53 @@ export function MediaLibrary({
   onAddMaterials,
   onDeleteItem,
   onExtractOutline,
-  onSelectOutlineSearchResult,
-  onSearchOutline,
+  onUpdateProjectScript,
+  onUploadProjectAudio,
+  onCombineProjectScriptItems,
+  onActivateProjectScriptItem,
+  onMatchProjectScriptItem,
+  onOffsetProjectScriptWindow,
+  onLocateProjectScriptItem,
+  onPrefetchProjectScriptItem,
+  onCreateProjectScriptClip,
+  onPlayProjectScriptSegment,
+  onStopProjectScriptSegment,
+  muteVideoDuringScriptPlayback = true,
+  onMuteVideoDuringScriptPlaybackChange,
 }: MediaLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const srtInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [projectScriptDialogOpen, setProjectScriptDialogOpen] = useState(false);
   const [isSavingDialog, setIsSavingDialog] = useState(false);
   const [isImportingMaterials, setIsImportingMaterials] = useState(false);
+  const [isImportingSrt, setIsImportingSrt] = useState(false);
+  const [isImportingProjectAudio, setIsImportingProjectAudio] = useState(false);
+  const [isSavingProjectScript, setIsSavingProjectScript] = useState(false);
+  const [isCombiningProjectScript, setIsCombiningProjectScript] = useState(false);
   const [isDeletingMaterialId, setIsDeletingMaterialId] = useState<string | null>(null);
+  const [playingScriptItemId, setPlayingScriptItemId] = useState<string | null>(null);
+  const [selectedScriptItemIds, setSelectedScriptItemIds] = useState<string[]>([]);
+  const [scriptItemMatchState, setScriptItemMatchState] = useState<
+    Record<string, ScriptLineMatchState>
+  >(() =>
+    Object.fromEntries(
+      Object.entries(projectScriptMatchResults ?? {}).map(([itemId, match]) => [
+        itemId,
+        {
+          ...match,
+          status: "matched" as const,
+          message: `已定位到 ${match.assetTitle} · ${formatSecondsToTimecode(
+            match.startSeconds
+          )}`,
+        },
+      ])
+    )
+  );
+  const projectScriptAudioPlayerRef = useRef<HTMLAudioElement | null>(null);
+  const pauseTimerRef = useRef<number | null>(null);
+  const activeScriptItemElementRef = useRef<HTMLDivElement | null>(null);
 
   const handleAddClick = () => {
     if (!canManageMaterials) {
@@ -130,29 +255,9 @@ export function MediaLibrary({
   const [srtText, setSrtText] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("materials");
   const [searchQuery, setSearchQuery] = useState("");
-  const [submittedSearchQuery, setSubmittedSearchQuery] = useState("");
-  const [outlineSearchRequestId, setOutlineSearchRequestId] = useState(0);
-  const [outlineSearchResults, setOutlineSearchResults] = useState<
-    StoryOutlineSearchResult[]
-  >([]);
-  const [outlineSearchState, setOutlineSearchState] = useState<
-    "idle" | "loading" | "embedding" | "keyword" | "llm"
-  >("idle");
+  const [projectScriptDraft, setProjectScriptDraft] = useState(projectScriptSrtContent ?? "");
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const normalizedSubmittedQuery = submittedSearchQuery.trim().toLowerCase();
-  const outlineSegments = useMemo(
-    () =>
-      buildStoryOutlineSearchSegments(
-        items.map((item) => ({
-          id: item.id,
-          title: item.title,
-          synopsis: item.synopsis,
-          storyOutline: item.storyOutline,
-        }))
-      ),
-    [items]
-  );
   const filteredItems = useMemo(() => {
     if (!normalizedQuery || searchMode !== "materials") {
       return items;
@@ -166,12 +271,7 @@ export function MediaLibrary({
   }, [items, normalizedQuery, searchMode]);
 
   const handleSubmitSearch = () => {
-    if (searchMode === "outline" && !canUseOutlineSearch) {
-      return;
-    }
-
-    setSubmittedSearchQuery(searchQuery.trim());
-    setOutlineSearchRequestId((current) => current + 1);
+    setSearchQuery((current) => current.trim());
   };
 
   useEffect(() => {
@@ -181,48 +281,8 @@ export function MediaLibrary({
   }, [canUseOutlineSearch, searchMode]);
 
   useEffect(() => {
-    if (outlineSearchRequestId === 0) {
-      return;
-    }
-
-    if (!normalizedSubmittedQuery) {
-      setOutlineSearchResults([]);
-      setOutlineSearchState("idle");
-      return;
-    }
-
-    if (!onSearchOutline) {
-      setOutlineSearchResults([]);
-      setOutlineSearchState("idle");
-      return;
-    }
-
-    let isActive = true;
-    setOutlineSearchState("loading");
-
-    void onSearchOutline(submittedSearchQuery)
-      .then((response) => {
-        if (!isActive) {
-          return;
-        }
-
-        setOutlineSearchResults(response.results);
-        setOutlineSearchState(response.mode);
-      })
-      .catch((error) => {
-        console.error("剧情搜索失败:", error);
-        if (!isActive) {
-          return;
-        }
-
-        setOutlineSearchResults([]);
-        setOutlineSearchState("keyword");
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [normalizedSubmittedQuery, onSearchOutline, outlineSearchRequestId, submittedSearchQuery]);
+    setProjectScriptDraft(projectScriptSrtContent ?? "");
+  }, [projectScriptSrtContent]);
 
   const handleOpenDialog = (type: DialogType, itemId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -292,14 +352,112 @@ export function MediaLibrary({
   };
 
   const activeItem = items.find(i => i.id === activeItemId);
-  const outlineSearchStatusLabel =
-    outlineSearchState === "embedding"
-      ? "语义检索"
-      : outlineSearchState === "llm"
-        ? "大模型搜索"
-        : outlineSearchState === "loading"
-          ? "搜索中"
-          : "关键词检索";
+  const scriptLineItems = useMemo(
+    () => parseProjectScriptBlocks(projectScriptDraft),
+    [projectScriptDraft]
+  );
+  const hasProjectScript = projectScriptDraft.trim().length > 0;
+  const projectAudioSrc =
+    projectId && projectScriptAudio ? `/api/projects/${projectId}/audio` : null;
+  const selectedScriptIndexMap = useMemo(
+    () => new Map(scriptLineItems.map((item, index) => [item.id, index])),
+    [scriptLineItems]
+  );
+  const selectedScriptItems = useMemo(
+    () =>
+      selectedScriptItemIds
+        .map((itemId) => {
+          const index = selectedScriptIndexMap.get(itemId);
+          return index === undefined ? null : scriptLineItems[index];
+        })
+        .filter((item): item is ScriptLineItem => item !== null)
+        .sort((left, right) => left.index - right.index),
+    [scriptLineItems, selectedScriptItemIds, selectedScriptIndexMap]
+  );
+  const canCombineSelectedScriptItems =
+    selectedScriptItems.length >= 2 &&
+    selectedScriptItems.every(
+      (item, index) => index === 0 || item.index === selectedScriptItems[index - 1].index + 1
+    );
+
+  useEffect(() => {
+    const player = projectScriptAudioPlayerRef.current;
+    if (!player) {
+      return;
+    }
+
+    const handleEnded = () => {
+      setPlayingScriptItemId(null);
+      onStopProjectScriptSegment?.();
+    };
+    player.addEventListener("ended", handleEnded);
+    player.addEventListener("pause", handleEnded);
+
+    return () => {
+      player.removeEventListener("ended", handleEnded);
+      player.removeEventListener("pause", handleEnded);
+    };
+  }, [onStopProjectScriptSegment]);
+
+  useEffect(() => {
+    return () => {
+      if (pauseTimerRef.current !== null) {
+        window.clearTimeout(pauseTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const validItemIds = new Set(scriptLineItems.map((item) => item.id));
+    setSelectedScriptItemIds((previous) =>
+      previous.filter((itemId) => validItemIds.has(itemId))
+    );
+    setScriptItemMatchState((previous) =>
+      Object.fromEntries(
+        Object.entries(previous).filter(([itemId]) => validItemIds.has(itemId))
+      )
+    );
+  }, [scriptLineItems]);
+
+  useEffect(() => {
+    setScriptItemMatchState(
+      Object.fromEntries(
+        Object.entries(projectScriptMatchResults ?? {}).map(([itemId, match]) => [
+          itemId,
+          {
+            assetId: match.assetId,
+            assetTitle: match.assetTitle,
+            startSeconds: match.startSeconds,
+            status: "matched" as const,
+            message: `已定位到 ${match.assetTitle} · ${formatSecondsToTimecode(
+              match.startSeconds
+            )}`,
+          },
+        ])
+      )
+    );
+  }, [projectScriptMatchResults]);
+
+  useEffect(() => {
+    if (!activeProjectScriptItemId) {
+      return;
+    }
+
+    activeScriptItemElementRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [activeProjectScriptItemId]);
+
+  const handleToggleScriptItemSelection = (itemId: string) => {
+    setSelectedScriptItemIds((previous) => {
+      if (previous.includes(itemId)) {
+        return previous.filter((currentItemId) => currentItemId !== itemId);
+      }
+
+      return [...previous, itemId];
+    });
+  };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 w-full flex-col bg-card">
@@ -356,46 +514,44 @@ export function MediaLibrary({
           </ToggleGroup>
         ) : null}
         <div className="mt-3 flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  handleSubmitSearch();
-                }
-              }}
-              placeholder={
-                searchMode === "materials"
-                  ? "搜索素材..."
-                  : "搜索当前项目中的剧情片段..."
-              }
-              className="h-9 pl-9 bg-input border-border text-foreground placeholder:text-muted-foreground"
-            />
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={handleSubmitSearch}
-            disabled={searchMode === "outline" && !normalizedQuery}
-            className="h-9 shrink-0"
-          >
-            搜索
-          </Button>
+          {searchMode === "materials" ? (
+            <>
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleSubmitSearch();
+                    }
+                  }}
+                  placeholder="搜索素材..."
+                  className="h-9 border-border bg-input pl-9 text-foreground placeholder:text-muted-foreground"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleSubmitSearch}
+                className="h-9 shrink-0"
+              >
+                搜索
+              </Button>
+            </>
+          ) : (
+            <div className="w-full rounded-lg border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+              剧情模式展示当前项目的 SRT 脚本，可导入 SRT 文件或直接输入 SRT 内容，下面按字幕条目展示。
+            </div>
+          )}
         </div>
-        {searchMode === "outline" && normalizedSubmittedQuery && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            当前搜索方式：{outlineSearchStatusLabel}
-          </p>
-        )}
       </div>
 
       {/* Media List */}
       <ScrollArea className="min-h-0 flex-1">
-        {items.length === 0 ? (
+        {searchMode === "materials" && items.length === 0 ? (
           <div className="flex h-full min-h-72 flex-col items-center justify-center px-6 text-center">
             <p className="text-sm font-medium text-foreground">当前项目还没有素材</p>
             <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
@@ -404,71 +560,564 @@ export function MediaLibrary({
                 : "当前授权不包含素材管理能力。"}
             </p>
           </div>
-        ) : searchMode === "outline" ? (
-          <div className="p-2">
-            {!normalizedQuery ? (
+        ) : (
+        <div className="p-2">
+          {searchMode === "outline" && (
+            <>
+              <div className="mb-3 rounded-lg border border-border bg-background p-3">
+                <p className="text-sm font-medium text-foreground">
+                  {projectName ? `${projectName} 项目脚本` : "当前未选择项目"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {projectName
+                    ? "当前剧情面板绑定到项目级脚本。这里导入的是项目级 SRT 和配套音频，不属于任一素材。"
+                    : "请先选择一个项目，再在这里导入项目级 SRT 和音频。"}
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(
+                      "justify-between",
+                      hasProjectScript && "border-emerald-500/40 text-emerald-600"
+                    )}
+                    disabled={!projectName || isImportingSrt}
+                    onClick={() => setProjectScriptDialogOpen(true)}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Captions
+                        className={cn(
+                          "h-4 w-4",
+                          hasProjectScript && "text-emerald-600"
+                        )}
+                      />
+                      <span>导入 SRT</span>
+                    </span>
+                    <span
+                      className={cn(
+                        "text-xs",
+                        hasProjectScript
+                          ? "text-emerald-600"
+                          : "text-muted-foreground"
+                      )}
+                    >
+                      {isImportingSrt ? "导入中..." : hasProjectScript ? "已导入" : ""}
+                    </span>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(
+                      "justify-between",
+                      projectScriptAudio && "border-emerald-500/40 text-emerald-600"
+                    )}
+                    disabled={!projectName || isImportingProjectAudio}
+                    onClick={() => audioInputRef.current?.click()}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Music4
+                        className={cn(
+                          "h-4 w-4",
+                          projectScriptAudio && "text-emerald-600"
+                        )}
+                      />
+                      <span>导入音频</span>
+                    </span>
+                    <span
+                      className={cn(
+                        "text-xs",
+                        projectScriptAudio ? "text-emerald-600" : "text-muted-foreground"
+                      )}
+                    >
+                      {isImportingProjectAudio ? "导入中..." : projectScriptAudio ? "已导入" : ""}
+                    </span>
+                  </Button>
+                </div>
+                <div className="mt-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-between"
+                    disabled={
+                      !projectName ||
+                      !onCombineProjectScriptItems ||
+                      !canCombineSelectedScriptItems ||
+                      isCombiningProjectScript
+                    }
+                    onClick={async () => {
+                      if (!onCombineProjectScriptItems || !canCombineSelectedScriptItems) {
+                        return;
+                      }
+
+                      setIsCombiningProjectScript(true);
+                      try {
+                        await onCombineProjectScriptItems({
+                          itemIds: selectedScriptItems.map((item) => item.id),
+                        });
+                        setSelectedScriptItemIds([]);
+                      } catch (error) {
+                        console.error("组合项目文案失败:", error);
+                      } finally {
+                        setIsCombiningProjectScript(false);
+                      }
+                    }}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Link2 className="h-4 w-4" />
+                      <span>组合选中文案</span>
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {isCombiningProjectScript
+                        ? "组合中..."
+                        : canCombineSelectedScriptItems
+                          ? `已选 ${selectedScriptItems.length} 条`
+                          : "需选连续多条"}
+                    </span>
+                  </Button>
+                </div>
+                <div className="mt-3 flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+                  <div>
+                    <p className="text-xs font-medium text-foreground">播放时关闭视频原声</p>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      打开后只保留导入音频，关闭后视频原声会一同播放。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={muteVideoDuringScriptPlayback}
+                    onCheckedChange={onMuteVideoDuringScriptPlaybackChange}
+                    aria-label="播放时关闭视频原声"
+                  />
+                </div>
+                <input
+                  ref={srtInputRef}
+                  type="file"
+                  accept=".srt,.txt,text/plain"
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    if (!file || !projectName || !onUpdateProjectScript) {
+                      event.target.value = "";
+                      return;
+                    }
+
+                    setIsImportingSrt(true);
+
+                    try {
+                      const text = await file.text();
+                      setProjectScriptDraft(text);
+                    } catch (error) {
+                      console.error("导入 SRT 失败:", error);
+                    } finally {
+                      setIsImportingSrt(false);
+                      event.target.value = "";
+                    }
+                  }}
+                />
+                <input
+                  ref={audioInputRef}
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={async (event) => {
+                    const file = event.target.files?.[0];
+                    if (!file || !projectName || !onUploadProjectAudio) {
+                      event.target.value = "";
+                      return;
+                    }
+
+                    setIsImportingProjectAudio(true);
+
+                    try {
+                      await onUploadProjectAudio(file);
+                    } catch (error) {
+                      console.error("导入项目音频失败:", error);
+                    } finally {
+                      setIsImportingProjectAudio(false);
+                      event.target.value = "";
+                    }
+                  }}
+                />
+              </div>
+            </>
+          )}
+          {searchMode === "outline" ? (
+            !projectName ? (
               <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
-                <p className="text-sm font-medium text-foreground">搜索当前项目中的剧情片段</p>
+                <p className="text-sm font-medium text-foreground">当前未选择项目</p>
                 <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
-                  会在当前项目全部素材的大纲场景中查找标题和描述最匹配的片段。
+                  先选择一个项目，再到这里导入项目级 SRT 和音频。
                 </p>
               </div>
-            ) : outlineSearchState === "loading" ? (
+            ) : scriptLineItems.length === 0 ? (
               <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
-                <LoaderCircle className="h-6 w-6 animate-spin text-primary" />
-                <p className="mt-3 text-sm font-medium text-foreground">正在搜索剧情片段</p>
-              </div>
-            ) : outlineSearchResults.length === 0 ? (
-              <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
-                <p className="text-sm font-medium text-foreground">没有匹配的剧情片段</p>
+                <p className="text-sm font-medium text-foreground">当前还没有 SRT 条目</p>
                 <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
-                  试试更短的关键词，或者先为素材提取剧情大纲。
+                  导入 SRT 文件或直接输入 SRT 内容后，这里会按字幕条目展示列表。
                 </p>
               </div>
             ) : (
-              <>
-                <div className="mb-2 flex items-center justify-between px-1 text-xs text-muted-foreground">
-                  <span>当前使用{outlineSearchStatusLabel}</span>
-                  <span>{outlineSearchResults.length} 条结果</span>
-                </div>
-                {outlineSearchResults.map((result) => (
-                  <button
-                    key={`${result.assetId}:${result.sceneId}`}
-                    type="button"
-                    onClick={() => onSelectOutlineSearchResult?.(result)}
-                    className="mb-2 w-full rounded-lg border border-border bg-background p-3 text-left transition-colors hover:bg-secondary/50"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-card-foreground">
-                          {result.sceneTitle}
-                        </p>
-                        <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
-                          {result.sceneDescription}
-                        </p>
+              scriptLineItems.map((item, index) => (
+                <div
+                  key={item.id}
+                  ref={
+                    activeProjectScriptItemId === item.id
+                      ? activeScriptItemElementRef
+                      : undefined
+                  }
+                  role={scriptItemMatchState[item.id]?.status === "matched" ? "button" : undefined}
+                  tabIndex={scriptItemMatchState[item.id]?.status === "matched" ? 0 : undefined}
+                  onClick={() => {
+                    onActivateProjectScriptItem?.(item.id);
+                    const matchedState = scriptItemMatchState[item.id];
+                    if (matchedState?.status !== "matched" || !matchedState.assetId) {
+                      return;
+                    }
+
+                    onLocateProjectScriptItem?.({
+                      itemId: item.id,
+                      assetId: matchedState.assetId,
+                      startSeconds: matchedState.startSeconds,
+                    });
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") {
+                      return;
+                    }
+
+                    const matchedState = scriptItemMatchState[item.id];
+                    if (matchedState?.status !== "matched" || !matchedState.assetId) {
+                      onActivateProjectScriptItem?.(item.id);
+                      return;
+                    }
+
+                    event.preventDefault();
+                    onActivateProjectScriptItem?.(item.id);
+                    onLocateProjectScriptItem?.({
+                      itemId: item.id,
+                      assetId: matchedState.assetId,
+                      startSeconds: matchedState.startSeconds,
+                    });
+                  }}
+                  onMouseEnter={() => {
+                    const matchedState = scriptItemMatchState[item.id];
+                    if (matchedState?.status !== "matched" || !matchedState.assetId) {
+                      return;
+                    }
+
+                    onPrefetchProjectScriptItem?.({
+                      assetId: matchedState.assetId,
+                      startSeconds: matchedState.startSeconds,
+                    });
+                  }}
+                  onFocus={() => {
+                    const matchedState = scriptItemMatchState[item.id];
+                    if (matchedState?.status !== "matched" || !matchedState.assetId) {
+                      return;
+                    }
+
+                    onPrefetchProjectScriptItem?.({
+                      assetId: matchedState.assetId,
+                      startSeconds: matchedState.startSeconds,
+                    });
+                  }}
+                  className={cn(
+                    "mb-2 rounded-lg border border-border bg-background p-3",
+                    activeProjectScriptItemId === item.id &&
+                      "border-primary/50 bg-primary/5",
+                    selectedScriptItemIds.includes(item.id) &&
+                      "border-sky-500/50 bg-sky-500/5",
+                    scriptItemMatchState[item.id]?.status === "matched" &&
+                      "cursor-pointer transition-colors hover:border-primary/40 hover:bg-primary/5"
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <button
+                      type="button"
+                      aria-label={`选择第 ${index + 1} 条文案`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        handleToggleScriptItemSelection(item.id);
+                      }}
+                      className={cn(
+                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors",
+                        selectedScriptItemIds.includes(item.id)
+                          ? "border-sky-500 bg-sky-500 text-white"
+                          : "border-border bg-background hover:bg-secondary"
+                      )}
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!projectAudioSrc}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onActivateProjectScriptItem?.(item.id);
+                        if (!projectAudioSrc) {
+                          return;
+                        }
+
+                        const player =
+                          projectScriptAudioPlayerRef.current ?? new Audio();
+                        projectScriptAudioPlayerRef.current = player;
+
+                        if (playingScriptItemId === item.id) {
+                          player.pause();
+                          setPlayingScriptItemId(null);
+                          return;
+                        }
+
+                        if (pauseTimerRef.current !== null) {
+                          window.clearTimeout(pauseTimerRef.current);
+                          pauseTimerRef.current = null;
+                        }
+
+                        const startPlayback = () => {
+                          player.currentTime = item.startSeconds;
+                          void player.play();
+                          setPlayingScriptItemId(item.id);
+                          onPlayProjectScriptSegment?.({
+                            itemId: item.id,
+                            videoAssetId: scriptItemMatchState[item.id]?.assetId ?? null,
+                            audioStartSeconds: item.startSeconds,
+                            videoStartSeconds:
+                              scriptItemMatchState[item.id]?.startSeconds ?? item.startSeconds,
+                            audioEndSeconds: item.endSeconds,
+                            durationSeconds: item.durationSeconds,
+                          });
+
+                          if (item.endSeconds !== null && item.endSeconds > item.startSeconds) {
+                            pauseTimerRef.current = window.setTimeout(() => {
+                              player.pause();
+                              setPlayingScriptItemId(null);
+                            }, (item.endSeconds - item.startSeconds) * 1000);
+                          }
+                        };
+
+                        if (player.src !== projectAudioSrc) {
+                          player.src = projectAudioSrc;
+                          player.load();
+                          player.onloadedmetadata = () => {
+                            startPlayback();
+                            player.onloadedmetadata = null;
+                          };
+                          player.onerror = () => {
+                            console.error("项目音频加载失败:", projectAudioSrc);
+                            player.onerror = null;
+                          };
+                          return;
+                        }
+
+                        startPlayback();
+                      }}
+                      className={cn(
+                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition-colors",
+                        projectAudioSrc
+                          ? "border-border bg-background hover:bg-secondary"
+                          : "border-border/60 bg-muted/30 text-muted-foreground"
+                      )}
+                    >
+                      {playingScriptItemId === item.id ? (
+                        <Pause className="h-4 w-4" />
+                      ) : (
+                        <Play className="h-4 w-4" fill="currentColor" />
+                      )}
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                          {index + 1}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{item.timeline}</span>
                       </div>
-                      <Badge variant="secondary" className="shrink-0">
-                        {outlineSearchState === "embedding" || outlineSearchState === "llm"
-                          ? result.score.toFixed(3)
-                          : result.score}
-                      </Badge>
+                      <p className="mt-2 text-sm leading-6 text-card-foreground">{item.content}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          disabled={scriptItemMatchState[item.id]?.status === "matching"}
+                          onClick={async (event) => {
+                            event.stopPropagation();
+                            onActivateProjectScriptItem?.(item.id);
+                            if (!onMatchProjectScriptItem) {
+                              return;
+                            }
+
+                            setScriptItemMatchState((previous) => ({
+                              ...previous,
+                              [item.id]: {
+                                ...(previous[item.id] ?? {
+                                  assetId: "",
+                                  assetTitle: "",
+                                  startSeconds: item.startSeconds,
+                                }),
+                                status: "matching",
+                                message: "正在匹配画面...",
+                              },
+                            }));
+
+                            const matchedResult = await onMatchProjectScriptItem({
+                              id: item.id,
+                              content: item.content,
+                            });
+
+                            if (!matchedResult) {
+                              setScriptItemMatchState((previous) => ({
+                                ...previous,
+                                [item.id]: {
+                                  ...(previous[item.id] ?? {
+                                    assetId: "",
+                                    assetTitle: "",
+                                    startSeconds: item.startSeconds,
+                                  }),
+                                  status: "error",
+                                  message: "没有找到合适的画面",
+                                },
+                              }));
+                              return;
+                            }
+
+                            setScriptItemMatchState((previous) => ({
+                              ...previous,
+                              [item.id]: {
+                                assetId: matchedResult.assetId,
+                                assetTitle: matchedResult.assetTitle,
+                                startSeconds: matchedResult.startSeconds,
+                                status: "matched",
+                                message: `已定位到 ${matchedResult.assetTitle} · ${formatSecondsToTimecode(
+                                  matchedResult.startSeconds
+                                )}`,
+                              },
+                            }));
+                          }}
+                        >
+                          {scriptItemMatchState[item.id]?.status === "matching" ? (
+                            <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : null}
+                          匹配画面
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onActivateProjectScriptItem?.(item.id);
+                            const offsetSeconds = -(item.durationSeconds > 0 ? item.durationSeconds : 5);
+                            const matchedState = scriptItemMatchState[item.id];
+                            const nextMatch = onOffsetProjectScriptWindow?.({
+                              itemId: item.id,
+                              offsetSeconds,
+                              anchorSeconds: matchedState?.startSeconds ?? item.startSeconds,
+                            });
+
+                            if (!nextMatch) {
+                              return;
+                            }
+
+                            setScriptItemMatchState((previous) => ({
+                              ...previous,
+                              [item.id]: {
+                                assetId: nextMatch.assetId,
+                                assetTitle: nextMatch.assetTitle,
+                                startSeconds: nextMatch.startSeconds,
+                                status: "matched",
+                                message: `已定位到 ${nextMatch.assetTitle} · ${formatSecondsToTimecode(
+                                  nextMatch.startSeconds
+                                )}`,
+                              },
+                            }));
+                          }}
+                        >
+                          向前匹配
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onActivateProjectScriptItem?.(item.id);
+                            const offsetSeconds = item.durationSeconds > 0 ? item.durationSeconds : 5;
+                            const matchedState = scriptItemMatchState[item.id];
+                            const nextMatch = onOffsetProjectScriptWindow?.({
+                              itemId: item.id,
+                              offsetSeconds,
+                              anchorSeconds: matchedState?.startSeconds ?? item.startSeconds,
+                            });
+
+                            if (!nextMatch) {
+                              return;
+                            }
+
+                            setScriptItemMatchState((previous) => ({
+                              ...previous,
+                              [item.id]: {
+                                assetId: nextMatch.assetId,
+                                assetTitle: nextMatch.assetTitle,
+                                startSeconds: nextMatch.startSeconds,
+                                status: "matched",
+                                message: `已定位到 ${nextMatch.assetTitle} · ${formatSecondsToTimecode(
+                                  nextMatch.startSeconds
+                                )}`,
+                              },
+                            }));
+                          }}
+                        >
+                          向后匹配
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          disabled={!projectAudioSrc || item.durationSeconds <= 0}
+                          onClick={async (event) => {
+                            event.stopPropagation();
+                            onActivateProjectScriptItem?.(item.id);
+                            await onCreateProjectScriptClip?.({
+                              scriptItemId: item.id,
+                              scriptContent: item.content,
+                              content: item.content,
+                              audioStartSeconds: item.startSeconds,
+                              durationSeconds: item.durationSeconds,
+                            });
+                          }}
+                        >
+                          生成片段
+                        </Button>
+                      </div>
+                      {scriptItemMatchState[item.id]?.message ? (
+                        <div
+                          className={cn(
+                            "mt-2 inline-flex rounded-full px-2.5 py-1 text-[11px]",
+                            scriptItemMatchState[item.id]?.status === "error"
+                              ? "bg-destructive/10 text-destructive"
+                              : scriptItemMatchState[item.id]?.status === "matching"
+                                ? "bg-muted text-muted-foreground"
+                                : "bg-emerald-500/10 text-emerald-700"
+                          )}
+                        >
+                          {scriptItemMatchState[item.id]?.message}
+                        </div>
+                      ) : null}
+                      {!projectAudioSrc ? (
+                        <p className="mt-1 text-xs text-muted-foreground">请先导入项目音频后再播放。</p>
+                      ) : null}
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                      <span className="truncate">{result.assetTitle}</span>
-                      <span className="shrink-0">{result.timestamp}</span>
-                    </div>
-                  </button>
-                ))}
-              </>
-            )}
-          </div>
-        ) : (
-        <div className="p-2">
-          {filteredItems.length === 0 ? (
+                  </div>
+                </div>
+              ))
+            )
+          ) : filteredItems.length === 0 ? (
             <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 px-6 text-center">
               <p className="text-sm font-medium text-foreground">没有匹配的素材</p>
               <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
-                试试修改关键词，或者切到“剧情”模式按大纲场景搜索。
+                试试修改关键词，或者切到“剧情”模式管理脚本和字幕条目。
               </p>
             </div>
           ) : filteredItems.map((item) => {
@@ -619,7 +1268,7 @@ export function MediaLibrary({
         <p className="text-xs text-muted-foreground">
           {searchMode === "materials"
             ? `共 ${filteredItems.length} / ${items.length} 个素材`
-            : `共 ${outlineSegments.length} 个剧情片段`}
+            : `共 ${scriptLineItems.length} 条 SRT 条目`}
         </p>
       </div>
 
@@ -684,6 +1333,83 @@ export function MediaLibrary({
             </Button>
             <Button onClick={handleSave} disabled={isSavingDialog}>
               {isSavingDialog ? "保存中..." : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={projectScriptDialogOpen} onOpenChange={setProjectScriptDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>导入 SRT</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 rounded-lg bg-secondary p-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  {projectName ? `${projectName} 项目 SRT` : "当前未选择项目"}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  可直接粘贴 SRT 内容，或导入 SRT 文件。保存后会按字幕条目解析成列表。
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!projectName || isImportingSrt}
+                onClick={() => srtInputRef.current?.click()}
+              >
+                <Captions className="h-4 w-4" />
+                {isImportingSrt ? "导入中..." : "选择文件"}
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="project-script-text">SRT 内容</Label>
+              <Textarea
+                id="project-script-text"
+                value={projectScriptDraft}
+                onChange={(event) => setProjectScriptDraft(event.target.value)}
+                placeholder="粘贴或输入 SRT 内容，保存后会按字幕时间和文本解析。"
+                rows={12}
+                className="h-72 resize-none"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setProjectScriptDraft(projectScriptSrtContent ?? "");
+                setProjectScriptDialogOpen(false);
+              }}
+              disabled={isSavingProjectScript}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={async () => {
+                if (!projectName || !onUpdateProjectScript) {
+                  return;
+                }
+
+                setIsSavingProjectScript(true);
+                try {
+                  await onUpdateProjectScript({
+                    scriptSrtContent: projectScriptDraft,
+                  });
+                  setProjectScriptDialogOpen(false);
+                } catch (error) {
+                  console.error("保存项目 SRT 失败:", error);
+                } finally {
+                  setIsSavingProjectScript(false);
+                }
+              }}
+              disabled={!projectName || isSavingProjectScript}
+            >
+              {isSavingProjectScript ? "保存中..." : "保存并解析"}
             </Button>
           </DialogFooter>
         </DialogContent>

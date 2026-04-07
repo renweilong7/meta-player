@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import {
   appendMaterialsToProject,
+  getProjectById,
   importMaterialFromBuffer,
 } from "@/lib/persistence/repository";
 
@@ -38,6 +39,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: "未选择任何素材文件。" }, { status: 400 });
     }
 
+    const projectId = formData.get("projectId");
+    const targetProject =
+      typeof projectId === "string" && projectId.trim()
+        ? getProjectById(projectId)
+        : null;
+
     const importedMaterials = await Promise.all(
       files.map(async (file, index) => {
         const arrayBuffer = await file.arrayBuffer();
@@ -48,10 +55,16 @@ export async function POST(request: Request) {
           filename: file.name ?? "untitled.bin",
           mimeType: file.type,
           originalPath: typeof originalPath === "string" ? originalPath : undefined,
+          projectImportSettings: targetProject
+            ? {
+                autoTrimIntroOutro: targetProject.autoTrimIntroOutro ?? false,
+                introTrimSeconds: targetProject.introTrimSeconds ?? 0,
+                outroTrimSeconds: targetProject.outroTrimSeconds ?? 0,
+              }
+            : undefined,
         });
       })
     );
-    const projectId = formData.get("projectId");
 
     if (typeof projectId === "string" && projectId.trim()) {
       appendMaterialsToProject(

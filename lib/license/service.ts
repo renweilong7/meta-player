@@ -27,8 +27,8 @@ const LICENSE_SETTING_KEYS = {
 } as const;
 
 const DEFAULT_LICENSE_CONFIG: StoredLicenseConfig = {
-  mode: "basic",
-  status: "unregistered",
+  mode: "unauthorized",
+  status: "unauthorized",
   expiresAt: null,
   lastSyncAt: null,
   featureOverrides: {},
@@ -256,7 +256,7 @@ export const getStoredLicenseConfig = (): StoredLicenseConfig => {
   const status = settings.get(LICENSE_SETTING_KEYS.status);
 
   return {
-    mode: mode === "pro" ? "pro" : DEFAULT_LICENSE_CONFIG.mode,
+    mode: mode === "authorized" ? "authorized" : DEFAULT_LICENSE_CONFIG.mode,
     status: isKnownLicenseStatus(status) ? status : DEFAULT_LICENSE_CONFIG.status,
     expiresAt: normalizeNullableStoredValue(
       settings.get(LICENSE_SETTING_KEYS.expiresAt)
@@ -271,11 +271,11 @@ export const getStoredLicenseConfig = (): StoredLicenseConfig => {
 };
 
 const isKnownLicenseStatus = (value: string | undefined): value is LicenseStatus =>
-  value === "unregistered" ||
-  value === "pending" ||
-  value === "active" ||
-  value === "expired" ||
-  value === "disabled";
+  value === "authorized" || value === "unauthorized";
+
+const isRemoteAuthorized = (snapshot: RemoteLicenseSnapshot) =>
+  stableValue(snapshot.status).toLowerCase() === "authorized" ||
+  stableValue(snapshot.status).toLowerCase() === "active";
 
 export const saveStoredLicenseConfig = (input: LicenseConfigInput) => {
   const current = getStoredLicenseConfig();
@@ -305,11 +305,11 @@ export const saveStoredLicenseConfig = (input: LicenseConfigInput) => {
 const mapRemoteSnapshotToLicenseConfig = (
   snapshot: RemoteLicenseSnapshot
 ): LicenseConfigInput => ({
-  mode: snapshot.mode,
-  status: snapshot.status,
+  mode: isRemoteAuthorized(snapshot) ? "authorized" : "unauthorized",
+  status: isRemoteAuthorized(snapshot) ? "authorized" : "unauthorized",
   expiresAt: snapshot.expiresAt,
   lastSyncAt: snapshot.lastSyncAt,
-  featureOverrides: snapshot.features,
+  featureOverrides: {},
 });
 
 const shouldSyncLicense = (
@@ -332,27 +332,20 @@ const shouldSyncLicense = (
   return Date.now() - lastSyncAtMs >= LICENSE_SYNC_MIN_INTERVAL_MS;
 };
 
-/**
- * 本地有效授权态需要在服务端快照基础上再做一次“时间语义”收敛。
- *
- * 关键规则：
- * - 远端返回 `active` 只是说明“上次同步时它有效”。
- * - 如果本地已经明确知道 `expiresAt`，那到期后即使断网，也不能继续沿用旧的 active。
- *
- * 这样可以避免：
- * - 后台授权已经过期
- * - 客户端断网
- * - 仍然无限期按旧快照继续可用
- */
 const resolveEffectiveLicenseConfig = (
   config: StoredLicenseConfig
 ): StoredLicenseConfig => {
   const expiresAtMs = parseIsoTimestamp(config.expiresAt);
 
-  if (config.status === "active" && expiresAtMs !== null && Date.now() >= expiresAtMs) {
+  if (
+    config.status === "authorized" &&
+    expiresAtMs !== null &&
+    Date.now() >= expiresAtMs
+  ) {
     return {
       ...config,
-      status: "expired",
+      mode: "unauthorized",
+      status: "unauthorized",
     };
   }
 
@@ -392,84 +385,30 @@ export const syncStoredLicenseFromRemote = async (options?: {
   return saveStoredLicenseConfig(mapRemoteSnapshotToLicenseConfig(remoteSnapshot));
 };
 
-/**
- * 默认功能开启规则：
- * - `basic` 只包含基础功能。
- * - `pro` 自动包含基础 + 高级。
- *
- * override 总是后置，这样后台以后既可以“赠送单项高级功能”，
- * 也可以“在高级版里临时关闭某个功能”。
- */
-const isFeatureEnabledByMode = (
-  mode: LicenseMode,
-  featureKey: LicenseFeatureKey
-) => {
-  if (mode === "pro") {
-    return true;
-  }
-
-  return featureKey.startsWith("base.");
-};
-
 const resolveFeatureEnabled = (
   config: StoredLicenseConfig,
   featureKey: LicenseFeatureKey
 ) => {
-  if (config.status === "disabled" || config.status === "unregistered") {
-    return featureKey === "base.app_access";
+  if (featureKey === "base.app_access") {
+    return true;
   }
 
-  if (config.status === "pending") {
-    return featureKey === "base.app_access";
-  }
-
-  if (config.status === "expired") {
-    return featureKey.startsWith("base.");
-  }
-
-  const override = config.featureOverrides[featureKey];
-  if (typeof override === "boolean") {
-    return override;
-  }
-
-  return isFeatureEnabledByMode(config.mode, featureKey);
+  return config.status === "authorized";
 };
 
 const getModeLabel = (mode: LicenseMode) =>
-  mode === "pro" ? "高级授权" : "基础授权";
+  mode === "authorized" ? "已授权" : "未授权";
 
 const getStatusLabel = (status: LicenseStatus) => {
-  switch (status) {
-    case "active":
-      return "已授权";
-    case "pending":
-      return "待管理员授权";
-    case "expired":
-      return "已过期";
-    case "disabled":
-      return "已禁用";
-    case "unregistered":
-      return "未注册";
-    default:
-      return "未知状态";
-  }
+  return status === "authorized" ? "已授权" : "未授权";
 };
 
 const getStatusInstructions = (config: StoredLicenseConfig) => {
-  switch (config.status) {
-    case "active":
-      return config.mode === "pro"
-        ? "当前设备已开通高级授权，可使用基础能力和高级专业能力。"
-        : "当前设备已开通基础授权，可使用基础工作台能力。";
-    case "expired":
-      return "当前授权已过期，系统已自动降级为基础只读/基础能力模式。";
-    case "disabled":
-      return "当前设备已被后台禁用，仅保留基础访问入口用于查看授权信息。";
-    case "unregistered":
-    case "pending":
-    default:
-      return "请将本机指纹发送给管理员，后台完成授权后客户端即可按功能粒度生效。";
+  if (config.status === "authorized") {
+    return "当前设备已授权，全部功能已开放。";
   }
+
+  return "当前设备未授权，请将本机指纹发送给管理员，授权后即可开放全部功能。";
 };
 
 export const hasLicensedFeature = (featureKey: LicenseFeatureKey) =>
@@ -481,7 +420,7 @@ export const hasLicensedFeature = (featureKey: LicenseFeatureKey) =>
 /**
  * 所有真正有业务含义的写操作或高级能力，都应走这一层显式断言。
  *
- * 这样后续加新功能时，不需要在接口里硬编码“是不是 pro”，
+ * 这样后续加新功能时，不需要在接口里硬编码“是不是已授权”，
  * 只需要声明它依赖哪个 `featureKey` 即可。
  */
 export const assertLicensedFeature = (featureKey: LicenseFeatureKey) => {
@@ -503,15 +442,15 @@ export const assertLicensedFeature = (featureKey: LicenseFeatureKey) => {
 /**
  * 搜索能力需要把“产品级权限”翻译成“技术级搜索策略”。
  *
- * 规则：
- * - 基础授权始终退回关键词检索。
- * - 高级授权才允许走 Embedding / LLM 等高级策略。
+ * 当前策略：
+ * - 已授权：放行用户选择的搜索方案。
+ * - 未授权：统一退回默认远端 Embedding 方案，避免进入业务能力页面。
  */
 export const resolveSearchProviderByLicense = (
   requestedProvider: StorySearchProvider
 ): StorySearchProvider => {
   if (!hasLicensedFeature("pro.search_advanced")) {
-    return "local_embedding";
+    return "remote_embedding";
   }
 
   return requestedProvider;

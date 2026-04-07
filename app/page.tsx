@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ProjectItem, ProjectView } from "@/components/project-view";
 import { SidebarMenu } from "@/components/sidebar-menu";
 import { MediaLibrary, MediaItem } from "@/components/media-library";
@@ -20,11 +20,17 @@ import {
 } from "@/components/ui/resizable";
 import {
   fetchLibrarySnapshot,
+  fetchLocalEmbeddingModels,
   fetchAuthorizationSnapshot,
   refreshAuthorizationSnapshot,
   importMaterials,
   indexMaterialOutline,
+  combineProjectScriptItems,
   patchProject,
+  searchProjectStoryOutline,
+  uploadProjectAudio,
+  createProjectScriptClip,
+  compileProjectClipSequence,
   patchMaterial,
   patchMaterialMarker,
   postMaterialMarker,
@@ -33,11 +39,20 @@ import {
   removeMaterial,
   removeMaterialMarker,
   removeProject,
-  searchProjectStoryOutline,
 } from "@/lib/persistence/client";
 import { AuthorizationSnapshot } from "@/lib/license/types";
 import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
-import { MaterialImportInput } from "@/lib/persistence/types";
+import {
+  MaterialImportInput,
+  CrossAssetSwitchMode,
+  LocalEmbeddingModelOption,
+  PersistedProjectClip,
+  PersistedProjectClipCompilation,
+  PersistedProjectScriptMatchResult,
+  PersistedProjectScriptAudio,
+} from "@/lib/persistence/types";
+import { getSelectedProjectClipSequence } from "@/lib/project-clips/sequence";
+import { parseProjectScriptBlocks } from "@/lib/project-script/srt";
 import {
   generateStoryOutline,
   mapStoryOutlineToScenes,
@@ -53,8 +68,12 @@ const defaultSettings: AppSettingsValues = {
   aiModelName: "gpt-4o-mini",
   storySearchProvider: "remote_embedding",
   aiEmbeddingModelName: "text-embedding-3-small",
+  localEmbeddingModelDirectory: "",
   localEmbeddingModelName: "bge-small-zh",
   aiSearchModelName: "gpt-4o-mini",
+  localTtsModelName: "Tingting",
+  autoGenerateProjectScriptTts: true,
+  crossAssetSwitchMode: "frame_hold",
 };
 
 const LEGACY_PROJECT_STORAGE_KEY = "meta-player-projects";
@@ -87,6 +106,8 @@ const loadLegacyProjects = (materials: MediaItem[]) => {
       .map((item) => ({
         ...item,
         materialIds: item.materialIds.filter((id) => validMaterialIds.has(id)),
+        scriptItems: Array.isArray(item.scriptItems) ? item.scriptItems : [],
+        scriptClips: Array.isArray(item.scriptClips) ? item.scriptClips : [],
       }));
   } catch {
     return [] as ProjectItem[];
@@ -104,6 +125,27 @@ const mergeMaterialIntoList = (previous: MediaItem[], nextItem: MediaItem) => {
   return [nextItem, ...withoutCurrent];
 };
 
+const triggerBlobDownload = (blob: Blob, filename: string) => {
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.URL.revokeObjectURL(url);
+};
+
+const buildProjectClipSequenceSignature = (clipIds: string[]) => clipIds.join("|");
+
+const buildProjectCompilationFilename = (projectName: string) =>
+  `${projectName.replace(/[\\/:*?"<>|]+/g, " ").trim() || "项目成片"} 成片.mp4`;
+
+type DesktopBridge = {
+  chooseExportPath?: (defaultPath: string) => Promise<string | null>;
+  chooseDirectory?: (defaultPath: string) => Promise<string | null>;
+  saveFile?: (targetPath: string, bytes: Uint8Array) => Promise<string>;
+  openPath?: (targetPath: string) => Promise<string>;
+};
+
 export default function VideoEditorPage() {
   const [activeMenu, setActiveMenu] = useState("home");
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -116,6 +158,11 @@ export default function VideoEditorPage() {
   const [savedSettings, setSavedSettings] = useState<AppSettingsValues>(defaultSettings);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isLoadingLocalEmbeddingModels, setIsLoadingLocalEmbeddingModels] =
+    useState(false);
+  const [localEmbeddingModels, setLocalEmbeddingModels] = useState<
+    LocalEmbeddingModelOption[]
+  >([]);
   const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationSnapshot | null>(
@@ -123,7 +170,42 @@ export default function VideoEditorPage() {
   );
   const [pendingOutlineSearchResult, setPendingOutlineSearchResult] =
     useState<StoryOutlineSearchResult | null>(null);
+  const [pendingProjectScriptAction, setPendingProjectScriptAction] = useState<{
+    mode: "locate" | "play";
+    assetId: string;
+    startSeconds: number;
+    endSeconds: number | null;
+    durationSeconds: number;
+  } | null>(null);
+  const [playerPendingStartTime, setPlayerPendingStartTime] = useState<number | null>(
+    null
+  );
+  const [frameHoldPreviewSrc, setFrameHoldPreviewSrc] = useState<string | null>(null);
+  const [preloadTarget, setPreloadTarget] = useState<{
+    assetId: string;
+    startSeconds: number;
+  } | null>(null);
+  const [previewProjectClip, setPreviewProjectClip] =
+    useState<PersistedProjectClip | null>(null);
+  const [previewProjectCompilation, setPreviewProjectCompilation] =
+    useState<PersistedProjectClipCompilation | null>(null);
+  const [previewProjectCompilationSignature, setPreviewProjectCompilationSignature] =
+    useState<string | null>(null);
+  const [activeProjectScriptItemId, setActiveProjectScriptItemId] = useState<string | null>(
+    null
+  );
+  const [selectedProjectClipVersionByItemId, setSelectedProjectClipVersionByItemId] =
+    useState<Record<string, string>>({});
+  const [isProjectScriptPlaybackActive, setIsProjectScriptPlaybackActive] =
+    useState(false);
+  const [muteVideoDuringScriptPlayback, setMuteVideoDuringScriptPlayback] =
+    useState(true);
+  const [isCompilingProjectClips, setIsCompilingProjectClips] = useState(false);
+  const [isExportingProjectClips, setIsExportingProjectClips] = useState(false);
+  const [lastExportedCompilationPath, setLastExportedCompilationPath] =
+    useState<string | null>(null);
   const playerRef = useRef<VideoPlayerHandle>(null);
+  const projectScriptPlaybackTimerRef = useRef<number | null>(null);
 
   const currentProject = projects.find((item) => item.id === currentProjectId) ?? null;
   const visibleMediaItems = currentProject
@@ -133,9 +215,42 @@ export default function VideoEditorPage() {
   const selectedStoryScenes: StoryScene[] = mapStoryOutlineToScenes(
     selectedMedia?.storyOutline ?? []
   );
+  const outlineMediaOptions = useMemo(
+    () =>
+      visibleMediaItems
+        .filter((item) => (item.storyOutline?.length ?? 0) > 0)
+        .map((item) => ({
+          id: item.id,
+          title: item.title,
+          outlineSceneCount: item.storyOutline?.length ?? 0,
+        })),
+    [visibleMediaItems]
+  );
   const selectedMediaHighlight = Object.fromEntries(
     (selectedMedia?.markers ?? []).map((marker) => [marker.time, marker.content])
   ) as Record<number, string>;
+  const preloadMedia = preloadTarget
+    ? mediaItems.find((item) => item.id === preloadTarget.assetId)
+    : null;
+  const projectScriptItemOrder = parseProjectScriptItemOrder(
+    currentProject?.scriptSrtContent
+  );
+  const selectedProjectClipSequence = useMemo(
+    () =>
+      getSelectedProjectClipSequence(
+        currentProject?.scriptClips ?? [],
+        projectScriptItemOrder,
+        selectedProjectClipVersionByItemId
+      ),
+    [currentProject?.scriptClips, projectScriptItemOrder, selectedProjectClipVersionByItemId]
+  );
+  const selectedProjectClipSequenceSignature = useMemo(
+    () => buildProjectClipSequenceSignature(selectedProjectClipSequence.map((clip) => clip.id)),
+    [selectedProjectClipSequence]
+  );
+  const isPreviewingCurrentProjectCompilation =
+    previewProjectCompilation !== null &&
+    previewProjectCompilationSignature === selectedProjectClipSequenceSignature;
   const hasPendingSettingsChanges =
     JSON.stringify(settings) !== JSON.stringify(savedSettings);
   const isAuthorized = isAuthorizedStatus(authorization?.status);
@@ -163,8 +278,14 @@ export default function VideoEditorPage() {
   const canManageMarkers = hasAuthorizedFeature(authorization, "pro.marker");
   const markerDisabledReason =
     selectedMedia && !canManageMarkers
-      ? "高级授权可用：标记与审片功能当前未开通。"
+      ? "当前设备未授权，标记与审片功能暂不可用。"
       : null;
+
+  const clearProjectPreviewPlayback = () => {
+    setPreviewProjectClip(null);
+    setPreviewProjectCompilation(null);
+    setPreviewProjectCompilationSignature(null);
+  };
 
   /**
    * 首屏统一加载持久化快照。
@@ -173,6 +294,31 @@ export default function VideoEditorPage() {
    */
   useEffect(() => {
     let isActive = true;
+
+    const loadLocalModels = async (directory: string) => {
+      try {
+        setIsLoadingLocalEmbeddingModels(true);
+        const models = await fetchLocalEmbeddingModels(directory);
+
+        if (!isActive) {
+          return;
+        }
+
+        setLocalEmbeddingModels(models);
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setLibraryError(
+          error instanceof Error ? error.message : "读取本地 Embedding 模型列表失败。"
+        );
+      } finally {
+        if (isActive) {
+          setIsLoadingLocalEmbeddingModels(false);
+        }
+      }
+    };
 
     const loadSnapshot = async () => {
       setIsBootstrapping(true);
@@ -191,6 +337,15 @@ export default function VideoEditorPage() {
                   const createdProject = await postProject({
                     name: project.name,
                     description: project.description,
+                    storySearchProvider: snapshot.settings.storySearchProvider,
+                    embeddingModelSource:
+                      snapshot.settings.storySearchProvider === "local_embedding"
+                        ? "local"
+                        : "remote",
+                    embeddingModelId:
+                      snapshot.settings.storySearchProvider === "local_embedding"
+                        ? snapshot.settings.localEmbeddingModelName
+                        : snapshot.settings.aiEmbeddingModelName,
                   });
 
                   if (project.materialIds.length === 0) {
@@ -210,6 +365,7 @@ export default function VideoEditorPage() {
         setMediaItems(snapshot.materials);
         setSettings(snapshot.settings);
         setSavedSettings(snapshot.settings);
+        void loadLocalModels(snapshot.settings.localEmbeddingModelDirectory);
         setAuthorization(authorizationSnapshot);
         setProjects(nextProjects);
         setCurrentProjectId((current) => current ?? nextProjects[0]?.id ?? null);
@@ -238,6 +394,62 @@ export default function VideoEditorPage() {
       isActive = false;
     };
   }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const refreshModels = async () => {
+      try {
+        setIsLoadingLocalEmbeddingModels(true);
+        const models = await fetchLocalEmbeddingModels(
+          settings.localEmbeddingModelDirectory
+        );
+
+        if (!isActive) {
+          return;
+        }
+
+        setLocalEmbeddingModels(models);
+        const matchedModel = models.find(
+          (model) =>
+            model.id === settings.localEmbeddingModelName ||
+            model.name === settings.localEmbeddingModelName ||
+            model.directoryName === settings.localEmbeddingModelName
+        );
+        if (matchedModel && matchedModel.id !== settings.localEmbeddingModelName) {
+          setSettings((previous) => ({
+            ...previous,
+            localEmbeddingModelName: matchedModel.id,
+          }));
+        } else if (models.length > 0 && !matchedModel) {
+          setSettings((previous) => ({
+            ...previous,
+            localEmbeddingModelName: models[0].id,
+          }));
+        }
+      } catch (error) {
+        if (!isActive) {
+          return;
+        }
+
+        setLibraryError(
+          error instanceof Error ? error.message : "读取本地 Embedding 模型列表失败。"
+        );
+      } finally {
+        if (isActive) {
+          setIsLoadingLocalEmbeddingModels(false);
+        }
+      }
+    };
+
+    if (!isBootstrapping) {
+      void refreshModels();
+    }
+
+    return () => {
+      isActive = false;
+    };
+  }, [isBootstrapping, settings.localEmbeddingModelDirectory]);
 
   useEffect(() => {
     if (
@@ -378,7 +590,13 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleCreateProject = async (input: { name: string; description?: string }) => {
+  const handleCreateProject = async (input: {
+    name: string;
+    description?: string;
+    storySearchProvider: ProjectItem["storySearchProvider"];
+    embeddingModelSource: ProjectItem["embeddingModelSource"];
+    embeddingModelId: string;
+  }) => {
     const nextProject = await postProject(input);
     setProjects((previous) => [nextProject, ...previous]);
     setCurrentProjectId(nextProject.id);
@@ -386,7 +604,20 @@ export default function VideoEditorPage() {
 
   const handleUpdateProject = (
     id: string,
-    updates: { name: string; description?: string }
+    updates: {
+      name?: string;
+      description?: string;
+      storySearchProvider?: ProjectItem["storySearchProvider"];
+      embeddingModelSource?: ProjectItem["embeddingModelSource"];
+      embeddingModelId?: string;
+      materialIds?: string[];
+      crossAssetSwitchMode?: CrossAssetSwitchMode;
+      autoTrimIntroOutro?: boolean;
+      introTrimSeconds?: number;
+      outroTrimSeconds?: number;
+      scriptSrtContent?: string;
+      scriptAudio?: PersistedProjectScriptAudio | null;
+    }
   ) => {
     void patchProject(id, updates).then((updatedProject) => {
       setProjects((previous) =>
@@ -395,6 +626,85 @@ export default function VideoEditorPage() {
         )
       );
     });
+  };
+
+  const handleUpdateCurrentProjectScript = async (updates: {
+    scriptSrtContent?: string;
+    scriptAudio?: PersistedProjectScriptAudio | null;
+  }) => {
+    if (!currentProjectId) {
+      return;
+    }
+
+    setLibraryError(null);
+
+    try {
+      const updatedProject = await patchProject(currentProjectId, {
+        ...updates,
+        ...(updates.scriptSrtContent !== undefined ? { scriptMatchResults: {} } : {}),
+      });
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "更新项目脚本失败。"
+      );
+      throw error;
+    }
+  };
+
+  const handleUploadCurrentProjectAudio = async (file: File) => {
+    if (!currentProjectId) {
+      return;
+    }
+
+    setLibraryError(null);
+
+    try {
+      const fileWithPath = file as File & { path?: string };
+      const updatedProject = await uploadProjectAudio(currentProjectId, {
+        file,
+        originalPath: fileWithPath.path,
+      });
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "导入项目音频失败。"
+      );
+      throw error;
+    }
+  };
+
+  const handleCombineProjectScriptItems = async (input: {
+    itemIds: string[];
+  }) => {
+    if (!currentProjectId) {
+      return;
+    }
+
+    setLibraryError(null);
+
+    try {
+      const updatedProject = await combineProjectScriptItems(currentProjectId, input);
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+      setActiveProjectScriptItemId(input.itemIds[0] ?? null);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "组合项目文案失败。"
+      );
+      throw error;
+    }
   };
 
   const handleDeleteProject = async (id: string) => {
@@ -415,25 +725,302 @@ export default function VideoEditorPage() {
   };
 
   const handleOpenProject = (projectId: string) => {
+    clearProjectPreviewPlayback();
+    setActiveProjectScriptItemId(null);
     setCurrentProjectId(projectId);
     setActiveMenu("videos");
   };
 
   const handleSceneSelect = (id: string) => {
-    setCurrentSceneId(id);
-
     const selectedScene = selectedStoryScenes.find((scene) => scene.id === id);
     if (!selectedScene) {
       return;
     }
 
+    clearProjectPreviewPlayback();
+    setCurrentSceneId(id);
+
+    if ((previewProjectClip || previewProjectCompilation) && selectedMedia) {
+      setPlayerPendingStartTime(selectedScene.seekTime);
+      setPendingProjectScriptAction({
+        mode: "locate",
+        assetId: selectedMedia.id,
+        startSeconds: selectedScene.seekTime,
+        endSeconds: null,
+        durationSeconds: 0,
+      });
+      return;
+    }
+
     playerRef.current?.seekTo(selectedScene.seekTime);
+    if (activeProjectScriptItemId && selectedMedia?.mediaType === "video" && currentProjectId) {
+      void patchProject(currentProjectId, {
+        scriptMatchResults: {
+          ...(currentProject?.scriptMatchResults ?? {}),
+          [activeProjectScriptItemId]: {
+            assetId: selectedMedia.id,
+            assetTitle: selectedMedia.title,
+            startSeconds: selectedScene.seekTime,
+          },
+        },
+      }).then((updatedProject) => {
+        setProjects((previous) =>
+          previous.map((project) =>
+            project.id === updatedProject.id ? updatedProject : project
+          )
+        );
+      }).catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "更新剧情匹配时间失败。"
+        );
+      });
+    }
   };
 
   const handleSelectOutlineSearchResult = (result: StoryOutlineSearchResult) => {
+    clearProjectPreviewPlayback();
+    setPlayerPendingStartTime(result.startSeconds);
+
+    if (selectedMedia?.id === result.assetId) {
+      setCurrentSceneId(result.sceneId);
+      playerRef.current?.seekTo(result.startSeconds);
+      setPendingOutlineSearchResult(null);
+      return;
+    }
+
+    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
+      setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
+    }
+
     setSelectedMediaId(result.assetId);
     setCurrentSceneId(result.sceneId);
     setPendingOutlineSearchResult(result);
+  };
+
+  const clearProjectScriptPlaybackTimer = () => {
+    if (projectScriptPlaybackTimerRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(projectScriptPlaybackTimerRef.current);
+    projectScriptPlaybackTimerRef.current = null;
+  };
+
+  const handleMatchProjectScriptItem = async (item: {
+    id: string;
+    content: string;
+  }) => {
+    if (!currentProjectId || !item.content.trim()) {
+      return null;
+    }
+
+    setLibraryError(null);
+
+    try {
+      const searchResult = await searchProjectStoryOutline(
+        currentProjectId,
+        item.content,
+        1
+      );
+      const matchedResult = searchResult.results[0];
+
+      if (!matchedResult) {
+        setLibraryError("没有找到足够匹配的画面。");
+        return null;
+      }
+
+      handleSelectOutlineSearchResult(matchedResult);
+      const matchedAsset = mediaItems.find((media) => media.id === matchedResult.assetId);
+      const persistedMatchResult: PersistedProjectScriptMatchResult = {
+        assetId: matchedResult.assetId,
+        assetTitle: matchedAsset?.title ?? "未命名素材",
+        startSeconds: matchedResult.startSeconds,
+      };
+
+      const updatedProject = await patchProject(currentProjectId, {
+        scriptMatchResults: {
+          ...(currentProject?.scriptMatchResults ?? {}),
+          [item.id]: persistedMatchResult,
+        },
+      });
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+
+      return persistedMatchResult;
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "匹配画面失败。"
+      );
+      return null;
+    }
+  };
+
+  const handleOffsetProjectScriptWindow = (input: {
+    itemId: string;
+    offsetSeconds: number;
+    anchorSeconds: number;
+  }) => {
+    if (!selectedMedia || selectedMedia.mediaType !== "video") {
+      return null;
+    }
+
+    const currentPlayerTime = Math.max(playerRef.current?.getCurrentTime() ?? 0, 0);
+    const nextStartSeconds = Math.max(currentPlayerTime + input.offsetSeconds, 0);
+    playerRef.current?.seekTo(nextStartSeconds);
+
+    if (currentProjectId) {
+      const nextMatch = {
+        assetId: selectedMedia.id,
+        assetTitle: selectedMedia.title,
+        startSeconds: nextStartSeconds,
+      };
+
+      void patchProject(currentProjectId, {
+        scriptMatchResults: {
+          ...(currentProject?.scriptMatchResults ?? {}),
+          [input.itemId]: nextMatch,
+        },
+      }).then((updatedProject) => {
+        setProjects((previous) =>
+          previous.map((project) =>
+            project.id === updatedProject.id ? updatedProject : project
+          )
+        );
+      }).catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "更新剧情匹配时间失败。"
+        );
+      });
+    }
+
+    return {
+      assetId: selectedMedia.id,
+      assetTitle: selectedMedia.title,
+      startSeconds: nextStartSeconds,
+    };
+  };
+
+  const handleLocateProjectScriptItem = (item: {
+    itemId: string;
+    assetId: string;
+    startSeconds: number;
+  }) => {
+    setActiveProjectScriptItemId(item.itemId);
+    if (previewProjectClip || previewProjectCompilation) {
+      clearProjectPreviewPlayback();
+      setPlayerPendingStartTime(item.startSeconds);
+      setPendingProjectScriptAction({
+        mode: "locate",
+        assetId: item.assetId,
+        startSeconds: item.startSeconds,
+        endSeconds: null,
+        durationSeconds: 0,
+      });
+      return;
+    }
+
+    if (selectedMedia?.id === item.assetId) {
+      playerRef.current?.seekTo(item.startSeconds);
+      return;
+    }
+
+    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
+      setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
+    }
+
+    setSelectedMediaId(item.assetId);
+    setCurrentSceneId(null);
+    setPlayerPendingStartTime(item.startSeconds);
+    setPendingProjectScriptAction({
+      mode: "locate",
+      assetId: item.assetId,
+      startSeconds: item.startSeconds,
+      endSeconds: null,
+      durationSeconds: 0,
+    });
+  };
+
+  const handleStopProjectScriptSegment = () => {
+    clearProjectScriptPlaybackTimer();
+    playerRef.current?.pause();
+    setIsProjectScriptPlaybackActive(false);
+  };
+
+  const handlePlayProjectScriptSegment = (item: {
+    itemId: string;
+    videoAssetId: string | null;
+    audioStartSeconds: number;
+    videoStartSeconds: number;
+    audioEndSeconds: number | null;
+    durationSeconds: number;
+  }) => {
+    const targetAssetId = item.videoAssetId ?? selectedMedia?.id ?? null;
+    if (!targetAssetId) {
+      return;
+    }
+    const shouldUseCurrentPlayerTime =
+      item.itemId === activeProjectScriptItemId &&
+      selectedMedia?.id === targetAssetId &&
+      !previewProjectClip &&
+      !previewProjectCompilation;
+    const resolvedVideoStartSeconds = shouldUseCurrentPlayerTime
+      ? Math.max(playerRef.current?.getCurrentTime() ?? item.videoStartSeconds, 0)
+      : item.videoStartSeconds;
+
+    clearProjectScriptPlaybackTimer();
+    if (previewProjectClip || previewProjectCompilation) {
+      clearProjectPreviewPlayback();
+      setIsProjectScriptPlaybackActive(true);
+      playerRef.current?.setMuted(muteVideoDuringScriptPlayback);
+      setPlayerPendingStartTime(resolvedVideoStartSeconds);
+      setPendingProjectScriptAction({
+        mode: "play",
+        assetId: targetAssetId,
+        startSeconds: resolvedVideoStartSeconds,
+        endSeconds: item.audioEndSeconds,
+        durationSeconds: item.durationSeconds,
+      });
+      return;
+    }
+    if (selectedMedia?.id !== targetAssetId) {
+      if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
+        setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
+      }
+      setSelectedMediaId(targetAssetId);
+      setCurrentSceneId(null);
+      setIsProjectScriptPlaybackActive(true);
+      playerRef.current?.setMuted(muteVideoDuringScriptPlayback);
+      setPlayerPendingStartTime(resolvedVideoStartSeconds);
+      setPendingProjectScriptAction({
+        mode: "play",
+        assetId: targetAssetId,
+        startSeconds: resolvedVideoStartSeconds,
+        endSeconds: item.audioEndSeconds,
+        durationSeconds: item.durationSeconds,
+      });
+      return;
+    }
+
+    setIsProjectScriptPlaybackActive(true);
+    playerRef.current?.setMuted(muteVideoDuringScriptPlayback);
+    playerRef.current?.seekTo(resolvedVideoStartSeconds);
+    void playerRef.current?.play();
+
+    const clipDurationSeconds =
+      item.audioEndSeconds !== null && item.audioEndSeconds > item.audioStartSeconds
+        ? item.audioEndSeconds - item.audioStartSeconds
+        : item.durationSeconds;
+
+    if (clipDurationSeconds <= 0) {
+      return;
+    }
+
+    projectScriptPlaybackTimerRef.current = window.setTimeout(() => {
+      handleStopProjectScriptSegment();
+    }, clipDurationSeconds * 1000);
   };
 
   const handleCreateMarker = async (content: string) => {
@@ -462,18 +1049,216 @@ export default function VideoEditorPage() {
     }
   };
 
+  const handleCreateProjectScriptClip = async (item: {
+    scriptItemId: string;
+    scriptContent: string;
+    content: string;
+    audioStartSeconds: number;
+    durationSeconds: number;
+  }) => {
+    if (!currentProjectId || !selectedMedia || selectedMedia.mediaType !== "video") {
+      setLibraryError("请先在播放器中选中一个视频素材。");
+      return;
+    }
+
+    if (previewProjectClip || previewProjectCompilation) {
+      setLibraryError("请先退出片段或成片预览，再生成新的项目片段。");
+      return;
+    }
+
+    const startSeconds = Math.max(playerRef.current?.getCurrentTime() ?? 0, 0);
+    setLibraryError(null);
+    setActiveProjectScriptItemId(item.scriptItemId);
+
+    try {
+      const updatedProject = await createProjectScriptClip(currentProjectId, {
+        scriptItemId: item.scriptItemId,
+        scriptContent: item.scriptContent,
+        assetId: selectedMedia.id,
+        startSeconds,
+        audioStartSeconds: item.audioStartSeconds,
+        durationSeconds: item.durationSeconds,
+        label: item.content,
+      });
+
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === updatedProject.id ? updatedProject : project
+        )
+      );
+      const syncedProject = await patchProject(currentProjectId, {
+        scriptMatchResults: {
+          ...(updatedProject.scriptMatchResults ?? {}),
+          [item.scriptItemId]: {
+            assetId: selectedMedia.id,
+            assetTitle: selectedMedia.title,
+            startSeconds,
+          },
+        },
+      });
+      setProjects((previous) =>
+        previous.map((project) =>
+          project.id === syncedProject.id ? syncedProject : project
+        )
+      );
+      const latestClip = syncedProject.scriptClips.find(
+        (clip) => clip.scriptItemId === item.scriptItemId
+      );
+
+      if (latestClip) {
+        setSelectedProjectClipVersionByItemId((previous) => ({
+          ...previous,
+          [item.scriptItemId]: latestClip.id,
+        }));
+      }
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "生成片段失败。"
+      );
+      throw error;
+    }
+  };
+
+  const handlePreviewProjectClip = (clip: PersistedProjectClip) => {
+    setPreviewProjectCompilation(null);
+    setPreviewProjectCompilationSignature(null);
+    setActiveProjectScriptItemId(clip.scriptItemId);
+    setPreviewProjectClip(clip);
+  };
+
+  const handleSelectProjectClipVersion = (scriptItemId: string, clipId: string) => {
+    setSelectedProjectClipVersionByItemId((previous) => ({
+      ...previous,
+      [scriptItemId]: clipId,
+    }));
+  };
+
+  const handlePreviewProjectClipCompilation = async () => {
+    if (!currentProjectId || selectedProjectClipSequence.length === 0) {
+      setLibraryError("当前没有可合成的项目片段。");
+      return;
+    }
+
+    setLibraryError(null);
+    setIsCompilingProjectClips(true);
+
+    try {
+      const compilation = await compileProjectClipSequence(currentProjectId, {
+        clipIds: selectedProjectClipSequence.map((clip) => clip.id),
+        label: `${currentProject?.name ?? "当前项目"} 成片预览`,
+      });
+
+      setPreviewProjectClip(null);
+      setPreviewProjectCompilation(compilation);
+      setPreviewProjectCompilationSignature(selectedProjectClipSequenceSignature);
+      setActiveProjectScriptItemId(null);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "合成预览失败。"
+      );
+    } finally {
+      setIsCompilingProjectClips(false);
+    }
+  };
+
+  const handleExportProjectClipCompilation = async () => {
+    if (!currentProjectId || selectedProjectClipSequence.length === 0) {
+      setLibraryError("当前没有可导出的项目片段。");
+      return;
+    }
+
+    setLibraryError(null);
+    setIsExportingProjectClips(true);
+
+    try {
+      const compilation =
+        previewProjectCompilation &&
+        previewProjectCompilationSignature === selectedProjectClipSequenceSignature
+          ? previewProjectCompilation
+          : await compileProjectClipSequence(currentProjectId, {
+              clipIds: selectedProjectClipSequence.map((clip) => clip.id),
+              label: `${currentProject?.name ?? "当前项目"} 成片`,
+            });
+
+      const response = await fetch(compilation.src);
+      if (!response.ok) {
+        throw new Error("导出成片文件读取失败。");
+      }
+
+      const blob = await response.blob();
+      const desktopBridge = (
+        window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+      ).metaPlayerDesktop;
+      const desiredFilename = buildProjectCompilationFilename(
+        currentProject?.name ?? "当前项目"
+      );
+
+      if (desktopBridge?.chooseExportPath) {
+        const selectedPath = await desktopBridge.chooseExportPath(desiredFilename);
+        if (!selectedPath) {
+          return;
+        }
+        const arrayBuffer = await blob.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        if (!desktopBridge.saveFile) {
+          throw new Error("当前桌面环境未启用文件写入能力。");
+        }
+
+        const savedPath = await desktopBridge.saveFile(selectedPath, uint8Array);
+        setLastExportedCompilationPath(savedPath);
+        return;
+      }
+
+      triggerBlobDownload(blob, desiredFilename);
+      setLastExportedCompilationPath(desiredFilename);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "导出成片失败。"
+      );
+    } finally {
+      setIsExportingProjectClips(false);
+    }
+  };
+
+  const handleOpenExportDirectory = async () => {
+    if (!lastExportedCompilationPath) {
+      return;
+    }
+
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.openPath) {
+      setLibraryError("当前环境暂不支持直接打开导出目录。");
+      return;
+    }
+
+    try {
+      await desktopBridge.openPath(lastExportedCompilationPath);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "打开导出目录失败。"
+      );
+    }
+  };
+
   const handleMarkStart = () => {
+    clearProjectPreviewPlayback();
     playerRef.current?.pause();
     setPendingMarkerTime(playerRef.current?.getCurrentTime() ?? 0);
   };
 
   const handleMarkEditStart = (time: number) => {
+    clearProjectPreviewPlayback();
     playerRef.current?.pause();
     playerRef.current?.seekTo(time);
     setPendingMarkerTime(time);
   };
 
   const handleAdjustMarkerTime = (nextTime: number) => {
+    clearProjectPreviewPlayback();
     setPendingMarkerTime(nextTime);
     playerRef.current?.seekTo(nextTime);
   };
@@ -533,25 +1318,23 @@ export default function VideoEditorPage() {
    * - 最后一个场景允许命中到 end，避免播放到素材结尾时丢失选中态
    */
   const handlePlayerTimeChange = (time: number) => {
-    if (selectedStoryScenes.length === 0) {
-      return;
-    }
+    if (selectedStoryScenes.length !== 0) {
+      const matchedScene = selectedStoryScenes.find((scene, index) => {
+        const [startTimecode, endTimecode] = scene.timestamp.split(" - ");
+        const startSeconds = parseTimecodeToSeconds(startTimecode);
+        const endSeconds = parseTimecodeToSeconds(endTimecode);
+        const isLastScene = index === selectedStoryScenes.length - 1;
 
-    const matchedScene = selectedStoryScenes.find((scene, index) => {
-      const [startTimecode, endTimecode] = scene.timestamp.split(" - ");
-      const startSeconds = parseTimecodeToSeconds(startTimecode);
-      const endSeconds = parseTimecodeToSeconds(endTimecode);
-      const isLastScene = index === selectedStoryScenes.length - 1;
+        if (isLastScene) {
+          return time >= startSeconds && time <= endSeconds;
+        }
 
-      if (isLastScene) {
-        return time >= startSeconds && time <= endSeconds;
+        return time >= startSeconds && time < endSeconds;
+      });
+
+      if (matchedScene && matchedScene.id !== currentSceneId) {
+        setCurrentSceneId(matchedScene.id);
       }
-
-      return time >= startSeconds && time < endSeconds;
-    });
-
-    if (matchedScene && matchedScene.id !== currentSceneId) {
-      setCurrentSceneId(matchedScene.id);
     }
   };
 
@@ -580,7 +1363,96 @@ export default function VideoEditorPage() {
   };
 
   const handleBrowseMaterialDirectory = () => {
-    console.log("目录选择接口预留");
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.chooseDirectory) {
+      setLibraryError("当前桌面环境未启用目录选择能力。");
+      return;
+    }
+
+    void desktopBridge
+      .chooseDirectory(settings.materialSavePath)
+      .then((selectedPath) => {
+        if (!selectedPath) {
+          return;
+        }
+
+        setSettings((previous) => ({
+          ...previous,
+          materialSavePath: selectedPath,
+        }));
+      })
+      .catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "选择素材目录失败。"
+        );
+      });
+  };
+
+  const handleBrowseLocalEmbeddingModelDirectory = () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.chooseDirectory) {
+      setLibraryError("当前桌面环境未启用目录选择能力。");
+      return;
+    }
+
+    void desktopBridge
+      .chooseDirectory(settings.localEmbeddingModelDirectory)
+      .then((selectedPath) => {
+        if (!selectedPath) {
+          return;
+        }
+
+        setSettings((previous) => ({
+          ...previous,
+          localEmbeddingModelDirectory: selectedPath,
+        }));
+      })
+      .catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "选择本地模型目录失败。"
+        );
+      });
+  };
+
+  const handleRefreshLocalEmbeddingModels = async () => {
+    setLibraryError(null);
+    setIsLoadingLocalEmbeddingModels(true);
+
+    try {
+      const models = await fetchLocalEmbeddingModels(
+        settings.localEmbeddingModelDirectory
+      );
+      setLocalEmbeddingModels(models);
+      const matchedModel = models.find(
+        (model) =>
+          model.id === settings.localEmbeddingModelName ||
+          model.name === settings.localEmbeddingModelName ||
+          model.directoryName === settings.localEmbeddingModelName
+      );
+      if (matchedModel && matchedModel.id !== settings.localEmbeddingModelName) {
+        setSettings((previous) => ({
+          ...previous,
+          localEmbeddingModelName: matchedModel.id,
+        }));
+      } else if (models.length > 0 && !matchedModel) {
+        setSettings((previous) => ({
+          ...previous,
+          localEmbeddingModelName: models[0].id,
+        }));
+      }
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "刷新本地模型列表失败。"
+      );
+    } finally {
+      setIsLoadingLocalEmbeddingModels(false);
+    }
   };
 
   const handleRefreshAuthorization = async () => {
@@ -716,20 +1588,6 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleSearchOutline = useCallback(
-    async (query: string) => {
-      if (!currentProjectId) {
-        return {
-          mode: "keyword" as const,
-          results: [],
-        };
-      }
-
-      return searchProjectStoryOutline(currentProjectId, query);
-    },
-    [currentProjectId]
-  );
-
   /**
    * 当选中素材变化、或该素材的大纲被新的 AI 结果替换时，
    * 自动把右侧当前场景同步到第一条有效场景，避免出现“当前选中 ID 不存在”的悬空状态。
@@ -749,6 +1607,31 @@ export default function VideoEditorPage() {
   }, [currentSceneId, selectedStoryScenes]);
 
   useEffect(() => {
+    const validClipIds = new Set((currentProject?.scriptClips ?? []).map((clip) => clip.id));
+
+    setSelectedProjectClipVersionByItemId((previous) => {
+      const next = { ...previous };
+      let changed = false;
+
+      Object.keys(next).forEach((scriptItemId) => {
+        if (!validClipIds.has(next[scriptItemId])) {
+          delete next[scriptItemId];
+          changed = true;
+        }
+      });
+
+      selectedProjectClipSequence.forEach((clip) => {
+        if (!next[clip.scriptItemId]) {
+          next[clip.scriptItemId] = clip.id;
+          changed = true;
+        }
+      });
+
+      return changed ? next : previous;
+    });
+  }, [currentProject?.scriptClips, selectedProjectClipSequence]);
+
+  useEffect(() => {
     if (!pendingOutlineSearchResult) {
       return;
     }
@@ -760,6 +1643,58 @@ export default function VideoEditorPage() {
     playerRef.current?.seekTo(pendingOutlineSearchResult.startSeconds);
     setPendingOutlineSearchResult(null);
   }, [pendingOutlineSearchResult, selectedMedia?.id]);
+
+  const handleVideoReady = () => {
+    setPlayerPendingStartTime(null);
+    setFrameHoldPreviewSrc(null);
+
+    if (pendingOutlineSearchResult && selectedMedia?.id === pendingOutlineSearchResult.assetId) {
+      playerRef.current?.seekTo(pendingOutlineSearchResult.startSeconds);
+      setPendingOutlineSearchResult(null);
+    }
+
+    if (!pendingProjectScriptAction) {
+      return;
+    }
+
+    if (selectedMedia?.id !== pendingProjectScriptAction.assetId) {
+      return;
+    }
+
+    if (pendingProjectScriptAction.mode === "locate") {
+      setPendingProjectScriptAction(null);
+      return;
+    }
+
+    const clipDurationSeconds =
+      pendingProjectScriptAction.endSeconds !== null &&
+      pendingProjectScriptAction.endSeconds > pendingProjectScriptAction.startSeconds
+        ? pendingProjectScriptAction.endSeconds - pendingProjectScriptAction.startSeconds
+        : pendingProjectScriptAction.durationSeconds;
+
+    if (clipDurationSeconds > 0) {
+      projectScriptPlaybackTimerRef.current = window.setTimeout(() => {
+        handleStopProjectScriptSegment();
+      }, clipDurationSeconds * 1000);
+    }
+
+    setPendingProjectScriptAction(null);
+  };
+
+  const handlePrefetchProjectScriptItem = (item: {
+    assetId: string;
+    startSeconds: number;
+  } | null) => {
+    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") !== "preload") {
+      return;
+    }
+
+    setPreloadTarget(item);
+  };
+
+  useEffect(() => () => {
+    clearProjectScriptPlaybackTimer();
+  }, []);
 
   const visibleMenuIds = isAuthorized
     ? [
@@ -786,9 +1721,15 @@ export default function VideoEditorPage() {
           values={settings}
           hasPendingChanges={hasPendingSettingsChanges}
           isSaving={isSavingSettings}
+          localEmbeddingModels={localEmbeddingModels}
+          isLoadingLocalEmbeddingModels={isLoadingLocalEmbeddingModels}
           onChangeField={handleSettingsFieldChange}
           onSave={handleSaveSettings}
           onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
+          onBrowseLocalEmbeddingModelDirectory={
+            handleBrowseLocalEmbeddingModelDirectory
+          }
+          onRefreshLocalEmbeddingModels={handleRefreshLocalEmbeddingModels}
         />
       ) : activeMenu === "user" ? (
         <UserPanel
@@ -802,6 +1743,9 @@ export default function VideoEditorPage() {
             items={projects}
             selectedProjectId={currentProjectId}
             canManageProjects={canManageProjects}
+            defaultStorySearchProvider={settings.storySearchProvider}
+            defaultRemoteEmbeddingModel={settings.aiEmbeddingModelName}
+            localEmbeddingModels={localEmbeddingModels}
             onCreateProject={handleCreateProject}
             onUpdateProject={handleUpdateProject}
             onDeleteProject={handleDeleteProject}
@@ -826,16 +1770,37 @@ export default function VideoEditorPage() {
                   items={visibleMediaItems}
                   selectedId={selectedMediaId}
                   projectName={currentProject.name}
+                  projectId={currentProject.id}
+                  activeProjectScriptItemId={activeProjectScriptItemId}
+                  projectScriptSrtContent={currentProject.scriptSrtContent}
+                  projectScriptAudio={currentProject.scriptAudio}
+                  projectScriptMatchResults={currentProject.scriptMatchResults}
                   canManageMaterials={canManageMaterials}
                   canUseOutlineBasic={canUseOutlineBasic}
                   canUseOutlineSearch={canUseOutlineSearch}
-                  onSelect={setSelectedMediaId}
+                  onSelect={(id) => {
+                    clearProjectPreviewPlayback();
+                    setSelectedMediaId(id);
+                  }}
                   onUpdateItem={handleUpdateMediaItem}
                   onAddMaterials={handleAddMaterials}
                   onDeleteItem={handleDeleteMediaItem}
                   onExtractOutline={handleExtractOutline}
-                  onSelectOutlineSearchResult={handleSelectOutlineSearchResult}
-                  onSearchOutline={handleSearchOutline}
+                  onUpdateProjectScript={handleUpdateCurrentProjectScript}
+                  onUploadProjectAudio={handleUploadCurrentProjectAudio}
+                  onCombineProjectScriptItems={handleCombineProjectScriptItems}
+                  onActivateProjectScriptItem={setActiveProjectScriptItemId}
+                  onMatchProjectScriptItem={handleMatchProjectScriptItem}
+                  onOffsetProjectScriptWindow={handleOffsetProjectScriptWindow}
+                  onLocateProjectScriptItem={handleLocateProjectScriptItem}
+                  onPrefetchProjectScriptItem={handlePrefetchProjectScriptItem}
+                  onCreateProjectScriptClip={handleCreateProjectScriptClip}
+                  onPlayProjectScriptSegment={handlePlayProjectScriptSegment}
+                  onStopProjectScriptSegment={handleStopProjectScriptSegment}
+                  muteVideoDuringScriptPlayback={muteVideoDuringScriptPlayback}
+                  onMuteVideoDuringScriptPlaybackChange={
+                    setMuteVideoDuringScriptPlayback
+                  }
                 />
                 {(isBootstrapping || libraryError) && (
                   <div className="border-t border-border px-4 py-3 text-xs">
@@ -859,9 +1824,49 @@ export default function VideoEditorPage() {
                   <ResizablePanel defaultSize={56} minSize={20}>
                     <VideoPlayer
                       ref={playerRef}
-                      title={selectedMedia?.title}
-                      src={canUsePlayback ? selectedMedia?.src : undefined}
-                      mediaType={canUsePlayback ? selectedMedia?.mediaType : "video"}
+                      title={
+                        previewProjectCompilation?.label ??
+                        previewProjectClip?.label ??
+                        selectedMedia?.title
+                      }
+                      src={
+                        previewProjectCompilation?.src ??
+                        previewProjectClip?.src ??
+                        (canUsePlayback ? selectedMedia?.src : undefined)
+                      }
+                      mediaType={
+                        previewProjectCompilation || previewProjectClip
+                          ? "video"
+                          : canUsePlayback
+                            ? selectedMedia?.mediaType
+                            : "video"
+                      }
+                      pendingStartTime={playerPendingStartTime ?? undefined}
+                      preloadSrc={
+                        (currentProject?.crossAssetSwitchMode ?? "frame_hold") === "preload"
+                          ? preloadMedia?.src
+                          : undefined
+                      }
+                      preloadStartTime={
+                        (currentProject?.crossAssetSwitchMode ?? "frame_hold") === "preload"
+                          ? preloadTarget?.startSeconds
+                          : undefined
+                      }
+                      frameHoldPreviewSrc={frameHoldPreviewSrc}
+                      crossAssetSwitchMode={
+                        currentProject?.crossAssetSwitchMode ?? "frame_hold"
+                      }
+                      autoPlay={
+                        Boolean(previewProjectCompilation) ||
+                        Boolean(previewProjectClip) ||
+                        pendingProjectScriptAction?.mode === "play" &&
+                        pendingProjectScriptAction.assetId === selectedMedia?.id
+                      }
+                      muted={
+                        isProjectScriptPlaybackActive &&
+                        muteVideoDuringScriptPlayback
+                      }
+                      onReady={handleVideoReady}
                       highlight={selectedMediaHighlight}
                       onTimeChange={(time) => handlePlayerTimeChange(time)}
                     />
@@ -871,15 +1876,30 @@ export default function VideoEditorPage() {
 
                   <ResizablePanel defaultSize={44} minSize={12}>
                     <VideoEditorWorkspace
+                      projectName={currentProject.name}
                       mediaTitle={selectedMedia?.title}
+                      activeProjectClipId={previewProjectClip?.id ?? null}
+                      activeProjectScriptItemId={activeProjectScriptItemId}
+                      projectScriptItemOrder={projectScriptItemOrder}
                       disabled={!selectedMedia || !canManageMarkers}
                       disabledReason={markerDisabledReason}
                       pendingMarkerTime={pendingMarkerTime}
                       markers={selectedMedia?.markers ?? []}
+                      projectClips={currentProject.scriptClips}
+                      selectedClipVersionByItemId={selectedProjectClipVersionByItemId}
                       onMarkStart={handleMarkStart}
                       onMarkEditStart={handleMarkEditStart}
                       onAdjustMarkerTime={handleAdjustMarkerTime}
                       onSeekToTime={(time) => playerRef.current?.seekTo(time)}
+                      onPreviewProjectClip={handlePreviewProjectClip}
+                      onSelectProjectClipVersion={handleSelectProjectClipVersion}
+                      onPreviewProjectClipCompilation={handlePreviewProjectClipCompilation}
+                      onExportProjectClipCompilation={handleExportProjectClipCompilation}
+                      isPreviewingProjectCompilation={isPreviewingCurrentProjectCompilation}
+                      isCompilingProjectClips={isCompilingProjectClips}
+                      isExportingProjectClips={isExportingProjectClips}
+                      lastExportedCompilationPath={lastExportedCompilationPath}
+                      onOpenExportDirectory={handleOpenExportDirectory}
                       onCreateMarker={handleCreateMarker}
                       onUpdateMarker={handleUpdateMarker}
                       onDeleteMarker={handleDeleteMarker}
@@ -896,8 +1916,14 @@ export default function VideoEditorPage() {
                 <StoryOutline
                   scenes={selectedStoryScenes}
                   currentSceneId={currentSceneId}
+                  mediaOptions={outlineMediaOptions}
+                  selectedMediaId={selectedMediaId}
                   isExtracting={selectedMedia?.outlineExtractionStatus === "loading"}
                   extractionError={selectedMedia?.outlineExtractionError ?? null}
+                  onMediaSelect={(mediaId) => {
+                    clearProjectPreviewPlayback();
+                    setSelectedMediaId(mediaId);
+                  }}
                   onSceneSelect={handleSceneSelect}
                 />
               </div>
@@ -913,4 +1939,12 @@ const parseTimecodeToSeconds = (timecode: string): number => {
   const [hours, minutes, seconds] = timecode.split(":").map(Number);
 
   return hours * 3600 + minutes * 60 + seconds;
+};
+
+const parseProjectScriptItemOrder = (raw: string | undefined) => {
+  if (!raw?.trim()) {
+    return [] as string[];
+  }
+
+  return parseProjectScriptBlocks(raw).map((block) => block.id);
 };

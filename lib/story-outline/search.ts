@@ -19,6 +19,7 @@ export interface StoryOutlineSearchSegment {
   timestamp: string;
   searchableText: string;
   embedding?: number[];
+  embeddingModel?: string | null;
 }
 
 export interface StoryOutlineSearchResult extends StoryOutlineSearchSegment {

@@ -1,11 +1,6 @@
-export type LicenseMode = "basic" | "pro";
+export type LicenseMode = "unauthorized" | "authorized";
 
-export type LicenseStatus =
-  | "unregistered"
-  | "pending"
-  | "active"
-  | "expired"
-  | "disabled";
+export type LicenseStatus = "unauthorized" | "authorized";
 
 /**
  * 功能点编码采用“产品层级 + 功能名”的格式。
@@ -35,7 +30,7 @@ export interface LicenseFeatureEntitlement {
   key: LicenseFeatureKey;
   name: string;
   description: string;
-  includedInMode: LicenseMode;
+  includedInMode: "authorized";
   status: LicenseFeatureStatus;
   expiresAt?: string | null;
 }
@@ -92,8 +87,8 @@ export interface LicenseConfigInput {
  */
 export interface RemoteLicenseSnapshot {
   deviceId: string;
-  status: LicenseStatus;
-  mode: LicenseMode;
+  status: string;
+  mode: string;
   expiresAt: string | null;
   lastSyncAt: string | null;
   features: Partial<Record<LicenseFeatureKey, boolean>>;

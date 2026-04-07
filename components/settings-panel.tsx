@@ -10,6 +10,7 @@ import {
   Bot,
   Save,
   Sparkles,
+  RefreshCw,
 } from "lucide-react";
 import {
   Card,
@@ -29,7 +30,11 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { StorySearchProvider } from "@/lib/persistence/types";
+import {
+  CrossAssetSwitchMode,
+  LocalEmbeddingModelOption,
+  StorySearchProvider,
+} from "@/lib/persistence/types";
 
 export interface AppSettingsValues {
   materialSavePath: string;
@@ -39,29 +44,41 @@ export interface AppSettingsValues {
   aiModelName: string;
   storySearchProvider: StorySearchProvider;
   aiEmbeddingModelName: string;
+  localEmbeddingModelDirectory: string;
   localEmbeddingModelName: string;
   aiSearchModelName: string;
+  localTtsModelName: string;
+  autoGenerateProjectScriptTts: boolean;
+  crossAssetSwitchMode: CrossAssetSwitchMode;
 }
 
 interface SettingsPanelProps {
   values: AppSettingsValues;
   hasPendingChanges?: boolean;
   isSaving?: boolean;
+  localEmbeddingModels?: LocalEmbeddingModelOption[];
+  isLoadingLocalEmbeddingModels?: boolean;
   onChangeField: (
     field: keyof AppSettingsValues,
     value: string | boolean
   ) => void;
   onSave: () => void;
   onBrowseMaterialDirectory?: () => void;
+  onBrowseLocalEmbeddingModelDirectory?: () => void;
+  onRefreshLocalEmbeddingModels?: () => void;
 }
 
 export function SettingsPanel({
   values,
   hasPendingChanges = false,
   isSaving = false,
+  localEmbeddingModels = [],
+  isLoadingLocalEmbeddingModels = false,
   onChangeField,
   onSave,
   onBrowseMaterialDirectory,
+  onBrowseLocalEmbeddingModelDirectory,
+  onRefreshLocalEmbeddingModels,
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const normalizedValues: AppSettingsValues = {
@@ -72,8 +89,12 @@ export function SettingsPanel({
     aiModelName: values.aiModelName ?? "",
     storySearchProvider: values.storySearchProvider ?? "remote_embedding",
     aiEmbeddingModelName: values.aiEmbeddingModelName ?? "",
+    localEmbeddingModelDirectory: values.localEmbeddingModelDirectory ?? "",
     localEmbeddingModelName: values.localEmbeddingModelName ?? "",
     aiSearchModelName: values.aiSearchModelName ?? "",
+    localTtsModelName: values.localTtsModelName ?? "Tingting",
+    autoGenerateProjectScriptTts: values.autoGenerateProjectScriptTts ?? true,
+    crossAssetSwitchMode: values.crossAssetSwitchMode ?? "frame_hold",
   };
 
   return (
@@ -222,12 +243,14 @@ export function SettingsPanel({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
-                        <SelectItem value="local_embedding">本地 Embedding 模型</SelectItem>
+                        <SelectItem value="local_embedding">
+                          本地 Embedding 模型（测试功能）
+                        </SelectItem>
                         <SelectItem value="llm">直接大模型搜索</SelectItem>
                       </SelectContent>
                     </Select>
                     <FieldDescription>
-                      当前已实现远端 Embedding API 和直接大模型搜索；本地模型仍为配置预留。
+                      当前已实现远端 Embedding API 和直接大模型搜索；本地模型为测试功能。
                     </FieldDescription>
                   </FieldContent>
                 </Field>
@@ -271,30 +294,84 @@ export function SettingsPanel({
                       />
                     </div>
                     <FieldDescription>
-                      指定用于剧情片段语义检索的 embedding 模型名称，和大纲生成模型分开配置。
+                      作为新建项目时默认使用的远端 Embedding 模型名称。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="local-embedding-model-directory">
+                    本地 Embedding 模型目录（测试功能）
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="flex flex-col gap-3 md:flex-row">
+                      <Input
+                        id="local-embedding-model-directory"
+                        value={normalizedValues.localEmbeddingModelDirectory}
+                        onChange={(event) =>
+                          onChangeField("localEmbeddingModelDirectory", event.target.value)
+                        }
+                        placeholder="/Users/renyi/Models/embeddings"
+                        className="h-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="md:w-auto"
+                        onClick={onBrowseLocalEmbeddingModelDirectory}
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                        选择目录
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="md:w-auto"
+                        onClick={onRefreshLocalEmbeddingModels}
+                        disabled={isLoadingLocalEmbeddingModels}
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        刷新模型
+                      </Button>
+                    </div>
+                    <FieldDescription>
+                      测试功能：应用会扫描这个目录下的一级子目录，并与项目自带模型一起提供选择。
                     </FieldDescription>
                   </FieldContent>
                 </Field>
 
                 <Field>
                   <FieldLabel htmlFor="local-embedding-model-name">
-                    本地 Embedding 模型名称
+                    本地 Embedding 模型（测试功能）
                   </FieldLabel>
                   <FieldContent>
-                    <div className="relative">
-                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
+                    <Select
+                      value={normalizedValues.localEmbeddingModelName}
+                      onValueChange={(value) =>
+                        onChangeField("localEmbeddingModelName", value)
+                      }
+                    >
+                      <SelectTrigger
                         id="local-embedding-model-name"
-                        value={normalizedValues.localEmbeddingModelName}
-                        onChange={(event) =>
-                          onChangeField("localEmbeddingModelName", event.target.value)
-                        }
-                        placeholder="bge-small-zh"
-                        className="h-10 pl-9"
-                      />
-                    </div>
+                        className="h-10 w-full"
+                      >
+                        <SelectValue placeholder="选择本地 Embedding 模型（测试功能）" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {localEmbeddingModels.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.name}（测试功能）
+                            {model.source === "custom" ? " · 自定义" : " · 内置"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <FieldDescription>
-                      预留本地向量模型名称；当前版本尚未接入本地推理。
+                      {isLoadingLocalEmbeddingModels
+                        ? "正在扫描本地 Embedding 模型（测试功能）..."
+                        : localEmbeddingModels.length > 0
+                          ? "测试功能：作为新建项目时默认使用的本地 Embedding 模型。"
+                          : "测试功能：当前未扫描到可用模型，请检查模型目录或内置模型资源。"}
                     </FieldDescription>
                   </FieldContent>
                 </Field>
@@ -362,6 +439,7 @@ export function SettingsPanel({
               </FieldGroup>
             </CardContent>
           </Card>
+
         </div>
       </div>
     </div>

@@ -20,4 +20,4 @@ export const hasAuthorizedFeature = (
 
 export const isAuthorizedStatus = (
   status: LicenseStatus | null | undefined
-) => status === "active";
+) => status === "authorized";
