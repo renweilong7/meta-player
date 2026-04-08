@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  PersistedAiUsageRecord,
+  PersistedAiUsageSnapshot,
   LocalEmbeddingModelOption,
   MaterialImportInput,
   MaterialMarkerCreateInput,
@@ -45,6 +47,25 @@ const assertOk = async (response: Response) => {
 export const fetchLibrarySnapshot = async (): Promise<PersistedLibrarySnapshot> => {
   const response = await assertOk(await fetch("/api/bootstrap", { cache: "no-store" }));
   return (await response.json()) as PersistedLibrarySnapshot;
+};
+
+export const fetchAiUsageSnapshot = async (): Promise<PersistedAiUsageSnapshot> => {
+  const response = await assertOk(await fetch("/api/usage", { cache: "no-store" }));
+  return (await response.json()) as PersistedAiUsageSnapshot;
+};
+
+export const postAiUsageRecord = async (
+  input: Partial<PersistedAiUsageRecord>
+): Promise<void> => {
+  await assertOk(
+    await fetch("/api/usage", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    })
+  );
 };
 
 export const fetchAuthorizationSnapshot =
@@ -111,6 +132,23 @@ export const patchMaterial = async (
         "Content-Type": "application/json",
       },
       body: JSON.stringify(patch),
+    })
+  );
+
+  return (await response.json()) as PersistedMaterial;
+};
+
+export const generateMaterialSceneShotAnalysis = async (
+  materialId: string,
+  sceneId: string
+): Promise<PersistedMaterial> => {
+  const response = await assertOk(
+    await fetch(`/api/materials/${materialId}/shot-analysis`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ sceneId }),
     })
   );
 

@@ -8,6 +8,8 @@ import {
   STORY_OUTLINE_SYSTEM_PROMPT,
   buildStoryOutlineUserPrompt,
 } from "@/lib/story-outline/prompt";
+import { postAiUsageRecord } from "@/lib/persistence/client";
+import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
 
 const DEFAULT_OUTLINE_MODEL = "gpt-4o-mini";
 
@@ -24,6 +26,11 @@ interface OpenAiChatCompletionResponse {
   }>;
   error?: {
     message?: string;
+  };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
   };
 }
 
@@ -51,6 +58,7 @@ export const mapStoryOutlineToScenes = (
     duration: formatDurationLabel(record.endSeconds - record.startSeconds),
     timestamp: `${record.startTimecode} - ${record.endTimecode}`,
     seekTime: record.startSeconds,
+    shotAnalysis: record.shotAnalysis,
   }));
 
 /**
@@ -68,6 +76,7 @@ export const generateStoryOutline = async (
   config: StoryOutlineGenerationConfig
 ): Promise<StoryOutlineSceneRecord[]> => {
   const normalizedBaseUrl = config.baseUrl.replace(/\/+$/, "");
+  const model = config.model ?? DEFAULT_OUTLINE_MODEL;
   const response = await fetch(`${normalizedBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -75,23 +84,80 @@ export const generateStoryOutline = async (
       Authorization: `Bearer ${config.apiKey}`,
     },
     body: JSON.stringify({
-      model: config.model ?? DEFAULT_OUTLINE_MODEL,
+      model,
       temperature: 0.2,
       messages: buildMessages(input),
     }),
   });
 
   const payload = (await response.json()) as OpenAiChatCompletionResponse;
+  const tokenUsage = extractOpenAiTokenUsage(payload);
 
   if (!response.ok) {
+    await recordUsage({
+      action: "story_outline_generation",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "error",
+      errorMessage: payload.error?.message || "AI 接口调用失败",
+      ...tokenUsage,
+      inputCount: 1,
+      materialId: config.materialId,
+      metadata: {
+        mediaTitle: input.mediaTitle,
+      },
+    });
     throw new Error(payload.error?.message || "AI 接口调用失败");
   }
 
-  const rawContent = getAssistantText(payload);
-  const rawScenes = parseSceneDrafts(rawContent);
-  const srtTimelineBounds = extractSrtTimelineBounds(input.srtContent);
+  try {
+    const rawContent = getAssistantText(payload);
+    const rawScenes = parseSceneDrafts(rawContent);
+    const srtTimelineBounds = extractSrtTimelineBounds(input.srtContent);
 
-  return normalizeSceneDrafts(rawScenes, srtTimelineBounds);
+    const normalizedScenes = normalizeSceneDrafts(rawScenes, srtTimelineBounds);
+    await recordUsage({
+      action: "story_outline_generation",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "success",
+      ...tokenUsage,
+      inputCount: 1,
+      materialId: config.materialId,
+      metadata: {
+        mediaTitle: input.mediaTitle,
+        sceneCount: normalizedScenes.length,
+      },
+    });
+
+    return normalizedScenes;
+  } catch (error) {
+    await recordUsage({
+      action: "story_outline_generation",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "error",
+      errorMessage: error instanceof Error ? error.message : "剧情大纲提取失败",
+      ...tokenUsage,
+      inputCount: 1,
+      materialId: config.materialId,
+      metadata: {
+        mediaTitle: input.mediaTitle,
+      },
+    });
+    throw error;
+  }
+};
+
+const recordUsage = async (input: Parameters<typeof postAiUsageRecord>[0]) => {
+  try {
+    await postAiUsageRecord(input);
+  } catch (error) {
+    console.error("Failed to persist story outline usage", error);
+  }
 };
 
 const buildMessages = (

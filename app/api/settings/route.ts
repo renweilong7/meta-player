@@ -12,23 +12,31 @@ export async function GET() {
 export async function PUT(request: Request) {
   try {
     assertLicensedFeature("base.settings_basic");
-    const body = (await request.json()) as PersistedAppSettings;
+    const body = (await request.json()) as Partial<PersistedAppSettings>;
+    const current = getSettings();
 
     return NextResponse.json(
       saveSettings({
-        materialSavePath: body.materialSavePath,
-        defaultManagedImport: body.defaultManagedImport,
-        aiApiBaseUrl: body.aiApiBaseUrl,
-        aiApiKey: body.aiApiKey,
-        aiModelName: body.aiModelName,
-        storySearchProvider: body.storySearchProvider,
-        aiEmbeddingModelName: body.aiEmbeddingModelName,
-        localEmbeddingModelDirectory: body.localEmbeddingModelDirectory,
-        localEmbeddingModelName: body.localEmbeddingModelName,
-        aiSearchModelName: body.aiSearchModelName,
-        localTtsModelName: body.localTtsModelName,
-        autoGenerateProjectScriptTts: body.autoGenerateProjectScriptTts,
-        crossAssetSwitchMode: body.crossAssetSwitchMode,
+        materialSavePath: body.materialSavePath ?? current.materialSavePath,
+        defaultManagedImport: body.defaultManagedImport ?? current.defaultManagedImport,
+        aiApiBaseUrl: body.aiApiBaseUrl ?? current.aiApiBaseUrl,
+        aiApiKey: body.aiApiKey ?? current.aiApiKey,
+        aiModelName: body.aiModelName ?? current.aiModelName,
+        aiVisionBaseUrl: body.aiVisionBaseUrl ?? current.aiVisionBaseUrl,
+        aiVisionApiKey: body.aiVisionApiKey ?? current.aiVisionApiKey,
+        aiVisionModelName: body.aiVisionModelName ?? current.aiVisionModelName,
+        aiVisionFps: body.aiVisionFps ?? current.aiVisionFps,
+        storySearchProvider: body.storySearchProvider ?? current.storySearchProvider,
+        aiEmbeddingModelName: body.aiEmbeddingModelName ?? current.aiEmbeddingModelName,
+        localEmbeddingModelDirectory:
+          body.localEmbeddingModelDirectory ?? current.localEmbeddingModelDirectory,
+        localEmbeddingModelName:
+          body.localEmbeddingModelName ?? current.localEmbeddingModelName,
+        aiSearchModelName: body.aiSearchModelName ?? current.aiSearchModelName,
+        localTtsModelName: body.localTtsModelName ?? current.localTtsModelName,
+        autoGenerateProjectScriptTts:
+          body.autoGenerateProjectScriptTts ?? current.autoGenerateProjectScriptTts,
+        crossAssetSwitchMode: body.crossAssetSwitchMode ?? current.crossAssetSwitchMode,
       })
     );
   } catch (error) {

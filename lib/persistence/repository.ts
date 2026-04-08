@@ -21,8 +21,15 @@ import {
   isSqliteVecAvailable,
   listOutlineVectorTableNames,
 } from "@/lib/persistence/database";
+import { getDefaultLocalEmbeddingModelDirectory } from "@/lib/runtime/resource-paths";
 import {
+  AiUsageAction,
+  AiUsageProvider,
+  AiUsageStatus,
   CrossAssetSwitchMode,
+  PersistedAiUsageRecord,
+  PersistedAiUsageSnapshot,
+  PersistedAiUsageSummary,
   MaterialPatchInput,
   OutlineVectorSearchSupport,
   ProjectEmbeddingModelSource,
@@ -54,9 +61,13 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
+  aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
+  aiVisionApiKey: "",
+  aiVisionModelName: "qwen3.6-plus",
+  aiVisionFps: "2",
   storySearchProvider: "remote_embedding",
   aiEmbeddingModelName: "text-embedding-3-small",
-  localEmbeddingModelDirectory: "",
+  localEmbeddingModelDirectory: getDefaultLocalEmbeddingModelDirectory(),
   localEmbeddingModelName: "bge-small-zh",
   aiSearchModelName: "gpt-4o-mini",
   localTtsModelName: "Tingting",
@@ -169,6 +180,25 @@ type ProjectClipRow = {
   file_size: number;
   created_at: string;
   updated_at: string;
+};
+
+type AiUsageEventRow = {
+  id: string;
+  action: AiUsageAction;
+  provider: AiUsageProvider;
+  model: string;
+  endpoint: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  input_count: number | null;
+  status: AiUsageStatus;
+  error_message: string | null;
+  project_id: string | null;
+  material_id: string | null;
+  scene_id: string | null;
+  metadata_json: string | null;
+  created_at: string;
 };
 
 /**
@@ -310,6 +340,51 @@ const parseEmbeddingJson = (raw: string | null): number[] | undefined => {
     return undefined;
   }
 };
+
+const parseAiUsageMetadata = (
+  raw: string | null
+): PersistedAiUsageRecord["metadata"] | undefined => {
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const entries = Object.entries(parsed).filter(
+      ([key, value]) =>
+        Boolean(key) &&
+        (typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean" ||
+          value === null)
+    );
+
+    return entries.length > 0
+      ? (Object.fromEntries(entries) as PersistedAiUsageRecord["metadata"])
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const mapRowToAiUsageRecord = (row: AiUsageEventRow): PersistedAiUsageRecord => ({
+  id: row.id,
+  action: row.action,
+  provider: row.provider,
+  model: row.model,
+  endpoint: row.endpoint,
+  inputTokens: row.input_tokens,
+  outputTokens: row.output_tokens,
+  totalTokens: row.total_tokens,
+  inputCount: row.input_count,
+  status: row.status,
+  errorMessage: row.error_message,
+  projectId: row.project_id,
+  materialId: row.material_id,
+  sceneId: row.scene_id,
+  metadata: parseAiUsageMetadata(row.metadata_json),
+  createdAt: row.created_at,
+});
 
 const groupOutlineVectorRecordsByDimension = (records: OutlineVectorRecord[]) => {
   const groups = new Map<number, OutlineVectorRecord[]>();
@@ -663,7 +738,7 @@ const normalizeProjectEmbeddingConfig = (input: {
   };
 };
 
-const listProjectIdsByAssetId = (assetId: string) => {
+export const listProjectIdsByAssetId = (assetId: string) => {
   const database = getDatabase();
 
   return (
@@ -896,6 +971,13 @@ export const getSettings = (): PersistedAppSettings => {
     aiApiBaseUrl: stored.get("aiApiBaseUrl") ?? SETTINGS_DEFAULTS.aiApiBaseUrl,
     aiApiKey: stored.get("aiApiKey") ?? SETTINGS_DEFAULTS.aiApiKey,
     aiModelName: stored.get("aiModelName") ?? SETTINGS_DEFAULTS.aiModelName,
+    aiVisionBaseUrl:
+      stored.get("aiVisionBaseUrl") ?? SETTINGS_DEFAULTS.aiVisionBaseUrl,
+    aiVisionApiKey:
+      stored.get("aiVisionApiKey") ?? SETTINGS_DEFAULTS.aiVisionApiKey,
+    aiVisionModelName:
+      stored.get("aiVisionModelName") ?? SETTINGS_DEFAULTS.aiVisionModelName,
+    aiVisionFps: stored.get("aiVisionFps") ?? SETTINGS_DEFAULTS.aiVisionFps,
     storySearchProvider:
       (stored.get("storySearchProvider") as PersistedAppSettings["storySearchProvider"]) ??
       SETTINGS_DEFAULTS.storySearchProvider,
@@ -926,6 +1008,10 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     aiApiBaseUrl: settings.aiApiBaseUrl,
     aiApiKey: settings.aiApiKey,
     aiModelName: settings.aiModelName,
+    aiVisionBaseUrl: settings.aiVisionBaseUrl,
+    aiVisionApiKey: settings.aiVisionApiKey,
+    aiVisionModelName: settings.aiVisionModelName,
+    aiVisionFps: settings.aiVisionFps,
     storySearchProvider: settings.storySearchProvider,
     aiEmbeddingModelName: settings.aiEmbeddingModelName,
     localEmbeddingModelDirectory: settings.localEmbeddingModelDirectory,
@@ -1070,6 +1156,134 @@ export const getProjectById = (id: string) => {
   return row ? mapRowToProject(row) : null;
 };
 
+export const recordAiUsageEvent = (input: {
+  action: AiUsageAction;
+  provider: AiUsageProvider;
+  model: string;
+  endpoint?: string | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
+  inputCount?: number | null;
+  status: AiUsageStatus;
+  errorMessage?: string | null;
+  projectId?: string | null;
+  materialId?: string | null;
+  sceneId?: string | null;
+  metadata?: PersistedAiUsageRecord["metadata"];
+}) => {
+  const database = getDatabase();
+
+  database
+    .prepare(`
+      INSERT INTO ai_usage_event (
+        id,
+        action,
+        provider,
+        model,
+        endpoint,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        input_count,
+        status,
+        error_message,
+        project_id,
+        material_id,
+        scene_id,
+        metadata_json,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      randomUUID(),
+      input.action,
+      input.provider,
+      input.model.trim() || "unknown",
+      input.endpoint ?? null,
+      input.inputTokens ?? null,
+      input.outputTokens ?? null,
+      input.totalTokens ?? null,
+      input.inputCount ?? null,
+      input.status,
+      input.errorMessage ?? null,
+      input.projectId ?? null,
+      input.materialId ?? null,
+      input.sceneId ?? null,
+      input.metadata ? JSON.stringify(input.metadata) : null,
+      new Date().toISOString()
+    );
+};
+
+export const listAiUsageRecords = (limit = 200): PersistedAiUsageRecord[] => {
+  const database = getDatabase();
+  const normalizedLimit = Math.max(1, Math.min(limit, 500));
+
+  const rows = database
+    .prepare(`
+      SELECT
+        id,
+        action,
+        provider,
+        model,
+        endpoint,
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        input_count,
+        status,
+        error_message,
+        project_id,
+        material_id,
+        scene_id,
+        metadata_json,
+        created_at
+      FROM ai_usage_event
+      ORDER BY created_at DESC
+      LIMIT ?
+    `)
+    .all(normalizedLimit) as AiUsageEventRow[];
+
+  return rows.map(mapRowToAiUsageRecord);
+};
+
+export const getAiUsageSummary = (): PersistedAiUsageSummary => {
+  const database = getDatabase();
+  const row = database
+    .prepare(`
+      SELECT
+        COUNT(*) AS total_calls,
+        SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_calls,
+        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_calls,
+        SUM(COALESCE(input_tokens, 0)) AS total_input_tokens,
+        SUM(COALESCE(output_tokens, 0)) AS total_output_tokens,
+        SUM(COALESCE(total_tokens, 0)) AS total_tokens
+      FROM ai_usage_event
+    `)
+    .get() as {
+      total_calls: number | null;
+      success_calls: number | null;
+      error_calls: number | null;
+      total_input_tokens: number | null;
+      total_output_tokens: number | null;
+      total_tokens: number | null;
+    };
+
+  return {
+    totalCalls: row.total_calls ?? 0,
+    successCalls: row.success_calls ?? 0,
+    errorCalls: row.error_calls ?? 0,
+    totalInputTokens: row.total_input_tokens ?? 0,
+    totalOutputTokens: row.total_output_tokens ?? 0,
+    totalTokens: row.total_tokens ?? 0,
+  };
+};
+
+export const getAiUsageSnapshot = (limit = 200): PersistedAiUsageSnapshot => ({
+  summary: getAiUsageSummary(),
+  records: listAiUsageRecords(limit),
+});
+
 export const listMaterialsByProjectId = (projectId: string): PersistedMaterial[] => {
   const database = getDatabase();
   const rows = database
@@ -1157,6 +1371,7 @@ export const getLibrarySnapshot = (): PersistedLibrarySnapshot => {
     settings: getSettings(),
     materials,
     projects,
+    usage: getAiUsageSnapshot(),
   };
 };
 

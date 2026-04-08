@@ -14,6 +14,29 @@ export interface StoryOutlineSceneRecord {
   endSeconds: number;
   startTimecode: string;
   endTimecode: string;
+  shotAnalysis?: SceneShotAnalysis;
+}
+
+export type SceneShotAnalysisStatus = "idle" | "loading" | "success" | "error";
+
+export interface SceneShotAnalysis {
+  status: SceneShotAnalysisStatus;
+  error?: string | null;
+  summary?: string;
+  action?: string;
+  expressionAndGaze?: string;
+  cinematography?: string;
+  atmosphere?: string;
+  commentaryHooks?: string;
+  updatedAt?: string;
+}
+
+export interface StorySceneSubtitleEntry {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  timeline: string;
+  content: string;
 }
 
 /**
@@ -29,6 +52,8 @@ export interface StoryScene {
   duration: string;
   timestamp: string;
   seekTime: number;
+  shotAnalysis?: SceneShotAnalysis;
+  subtitleEntries?: StorySceneSubtitleEntry[];
 }
 
 /**
@@ -53,6 +78,7 @@ export interface StoryOutlineGenerationConfig {
   baseUrl: string;
   apiKey: string;
   model?: string;
+  materialId?: string;
 }
 
 /**

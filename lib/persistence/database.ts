@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  getAppDataDirectory,
+  resolveBundledSqliteVecPath,
+} from "@/lib/runtime/resource-paths";
 
 /**
  * 统一管理应用内部数据目录。
@@ -9,8 +13,7 @@ import { DatabaseSync } from "node:sqlite";
  * 1. 当前开发环境对工作区写入最稳定。
  * 2. Electron/Next 本地开发时不依赖额外系统目录权限。
  */
-const APP_DATA_DIRECTORY =
-  process.env.META_PLAYER_DATA_DIR?.trim() || join(process.cwd(), ".meta-player");
+const APP_DATA_DIRECTORY = getAppDataDirectory();
 const DATABASE_PATH = join(APP_DATA_DIRECTORY, "meta-player.db");
 const DEFAULT_MATERIAL_DIRECTORY = join(APP_DATA_DIRECTORY, "materials");
 const SQLITE_VEC_PATH_ENV = "META_PLAYER_SQLITE_VEC_PATH";
@@ -39,33 +42,8 @@ const getSqliteVecFilename = () => {
 };
 
 const getSqliteVecCandidatePaths = () => {
-  const explicitPath = process.env[SQLITE_VEC_PATH_ENV]?.trim();
-  const electronResourcesPath = (process as NodeJS.Process & {
-    resourcesPath?: string;
-  }).resourcesPath;
-  const candidates = [
-    explicitPath || null,
-    join(
-      process.cwd(),
-      "bin",
-      "sqlite-vec",
-      `${process.platform}-${process.arch}`,
-      getSqliteVecFilename()
-    ),
-    join(
-      process.cwd(),
-      "..",
-      "sqlite-vec",
-      getSqliteVecFilename()
-    ),
-  ];
-
-  if (electronResourcesPath) {
-    candidates.push(join(electronResourcesPath, "sqlite-vec", getSqliteVecFilename()));
-    candidates.push(join(electronResourcesPath, "app", "sqlite-vec", getSqliteVecFilename()));
-  }
-
-  return candidates.filter((value): value is string => Boolean(value));
+  const resolvedPath = resolveBundledSqliteVecPath(getSqliteVecFilename());
+  return resolvedPath ? [resolvedPath] : [];
 };
 
 const loadSqliteVecExtension = (database: DatabaseSync) => {
@@ -235,6 +213,25 @@ const initializeSchema = (database: DatabaseSync) => {
       FOREIGN KEY (project_id) REFERENCES project(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS ai_usage_event (
+      id TEXT PRIMARY KEY,
+      action TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      endpoint TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      total_tokens INTEGER,
+      input_count INTEGER,
+      status TEXT NOT NULL CHECK (status IN ('success', 'error')),
+      error_message TEXT,
+      project_id TEXT,
+      material_id TEXT,
+      scene_id TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_asset_updated_at ON asset(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_asset_marker_asset_time ON asset_marker(asset_id, marker_time ASC);
     CREATE INDEX IF NOT EXISTS idx_asset_outline_segment_asset_id ON asset_outline_segment(asset_id);
@@ -242,6 +239,8 @@ const initializeSchema = (database: DatabaseSync) => {
     CREATE INDEX IF NOT EXISTS idx_project_asset_asset_id ON project_asset(asset_id);
     CREATE INDEX IF NOT EXISTS idx_project_script_item_project_line ON project_script_item(project_id, line_index ASC);
     CREATE INDEX IF NOT EXISTS idx_project_clip_project_created ON project_clip(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_event_created_at ON ai_usage_event(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_usage_event_action_created_at ON ai_usage_event(action, created_at DESC);
   `);
 
   /**

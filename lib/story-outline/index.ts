@@ -10,6 +10,7 @@ import {
   getProjectById,
   lockProjectEmbeddingConfig,
   listMaterialsByProjectId,
+  listProjectIdsByAssetId,
   listOutlineSegmentsByProjectId,
   replaceOutlineSegmentsForAsset,
   replaceProjectOutlineVectorsForAsset,
@@ -123,7 +124,12 @@ const indexProjectMaterialOutline = async (
     const localModel = resolveLocalEmbeddingModel(scopedSettings);
     const embeddings = await generateLocalEmbeddings(
       baseSegments.map((segment) => segment.searchableText),
-      scopedSettings
+      scopedSettings,
+      {
+        action: "story_outline_embedding_index",
+        projectId: project.id,
+        materialId: material.id,
+      }
     );
 
     replaceProjectOutlineVectorsForAsset({
@@ -151,6 +157,9 @@ const indexProjectMaterialOutline = async (
       baseUrl: settings.aiApiBaseUrl,
       apiKey: settings.aiApiKey,
       model: project.embeddingModelId,
+      action: "story_outline_embedding_index",
+      projectId: project.id,
+      materialId: material.id,
     }
   );
 
@@ -190,6 +199,34 @@ export const indexMaterialOutlineById = async (
   }
 
   return indexMaterialOutline(material, settings);
+};
+
+export const reindexMaterialOutlineForAttachedProjects = async (
+  materialId: string,
+  settings: PersistedAppSettings
+) => {
+  const material = getMaterialById(materialId);
+  if (!material) {
+    throw new Error("素材不存在。");
+  }
+
+  const projectIds = listProjectIdsByAssetId(materialId);
+  if (projectIds.length === 0) {
+    return [];
+  }
+
+  const results = await Promise.all(
+    projectIds.map(async (projectId) => {
+      const project = getProjectById(projectId);
+      if (!project) {
+        return null;
+      }
+
+      return indexProjectMaterialOutline(material, project, settings);
+    })
+  );
+
+  return results.filter((result) => result !== null);
 };
 
 export const searchProjectOutline = async (input: {
@@ -279,6 +316,7 @@ export const searchProjectOutline = async (input: {
         candidates: segments,
         settings: effectiveSettings,
         limit,
+        projectId: input.projectId,
       });
 
       return { mode: "llm", results };
@@ -296,7 +334,14 @@ export const searchProjectOutline = async (input: {
 
     try {
       const localModel = resolveLocalEmbeddingModel(effectiveSettings);
-      const [queryEmbedding] = await generateLocalEmbeddings([input.query], effectiveSettings);
+      const [queryEmbedding] = await generateLocalEmbeddings(
+        [input.query],
+        effectiveSettings,
+        {
+          action: "story_outline_embedding_search",
+          projectId: input.projectId,
+        }
+      );
       const vectorMatches = searchOutlineSegmentsByVector({
         projectId: input.projectId,
         embeddingModel: localModel.id,
@@ -320,6 +365,8 @@ export const searchProjectOutline = async (input: {
         baseUrl: input.settings.aiApiBaseUrl,
         apiKey: input.settings.aiApiKey,
         model: effectiveProject.embeddingModelId,
+        action: "story_outline_embedding_search",
+        projectId: input.projectId,
       });
 
       const vectorMatches = searchOutlineSegmentsByVector({

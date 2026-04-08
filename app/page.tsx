@@ -13,6 +13,7 @@ import { UserPanel } from "@/components/user-panel";
 import { UnauthorizedHome } from "@/components/unauthorized-home";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
 import { StoryOutline } from "@/components/story-outline";
+import { UsagePanel } from "@/components/usage-panel";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/resizable";
 import {
   fetchLibrarySnapshot,
+  fetchAiUsageSnapshot,
   fetchLocalEmbeddingModels,
   fetchAuthorizationSnapshot,
   refreshAuthorizationSnapshot,
@@ -32,6 +34,7 @@ import {
   createProjectScriptClip,
   compileProjectClipSequence,
   patchMaterial,
+  generateMaterialSceneShotAnalysis,
   patchMaterialMarker,
   postMaterialMarker,
   postProject,
@@ -46,6 +49,7 @@ import {
   MaterialImportInput,
   CrossAssetSwitchMode,
   LocalEmbeddingModelOption,
+  PersistedAiUsageSnapshot,
   PersistedProjectClip,
   PersistedProjectClipCompilation,
   PersistedProjectScriptMatchResult,
@@ -53,11 +57,12 @@ import {
 } from "@/lib/persistence/types";
 import { getSelectedProjectClipSequence } from "@/lib/project-clips/sequence";
 import { parseProjectScriptBlocks } from "@/lib/project-script/srt";
+import { extractSubtitleBlocksInRange } from "@/lib/project-script/srt";
 import {
   generateStoryOutline,
   mapStoryOutlineToScenes,
 } from "@/lib/story-outline/service";
-import { StoryScene } from "@/lib/story-outline/types";
+import { SceneShotAnalysis, StoryScene } from "@/lib/story-outline/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 const defaultSettings: AppSettingsValues = {
@@ -66,6 +71,10 @@ const defaultSettings: AppSettingsValues = {
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
+  aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
+  aiVisionApiKey: "",
+  aiVisionModelName: "qwen3.6-plus",
+  aiVisionFps: "2",
   storySearchProvider: "remote_embedding",
   aiEmbeddingModelName: "text-embedding-3-small",
   localEmbeddingModelDirectory: "",
@@ -75,6 +84,25 @@ const defaultSettings: AppSettingsValues = {
   autoGenerateProjectScriptTts: true,
   crossAssetSwitchMode: "frame_hold",
 };
+
+const defaultUsageSnapshot: PersistedAiUsageSnapshot = {
+  summary: {
+    totalCalls: 0,
+    successCalls: 0,
+    errorCalls: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalTokens: 0,
+  },
+  records: [],
+};
+
+const normalizeAppSettingsValues = (
+  values: Partial<AppSettingsValues> | AppSettingsValues
+): AppSettingsValues => ({
+  ...defaultSettings,
+  ...values,
+});
 
 const LEGACY_PROJECT_STORAGE_KEY = "meta-player-projects";
 
@@ -156,6 +184,9 @@ export default function VideoEditorPage() {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [settings, setSettings] = useState<AppSettingsValues>(defaultSettings);
   const [savedSettings, setSavedSettings] = useState<AppSettingsValues>(defaultSettings);
+  const [usageSnapshot, setUsageSnapshot] =
+    useState<PersistedAiUsageSnapshot>(defaultUsageSnapshot);
+  const [isRefreshingUsage, setIsRefreshingUsage] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isLoadingLocalEmbeddingModels, setIsLoadingLocalEmbeddingModels] =
@@ -170,6 +201,16 @@ export default function VideoEditorPage() {
   );
   const [pendingOutlineSearchResult, setPendingOutlineSearchResult] =
     useState<StoryOutlineSearchResult | null>(null);
+  const [outlineSearchQuery, setOutlineSearchQuery] = useState("");
+  const [outlineSearchState, setOutlineSearchState] = useState<
+    "idle" | "loading" | "embedding" | "keyword" | "llm"
+  >("idle");
+  const [outlineSearchResults, setOutlineSearchResults] = useState<
+    StoryOutlineSearchResult[]
+  >([]);
+  const [currentOutlineSearchResultId, setCurrentOutlineSearchResultId] = useState<
+    string | null
+  >(null);
   const [pendingProjectScriptAction, setPendingProjectScriptAction] = useState<{
     mode: "locate" | "play";
     assetId: string;
@@ -200,6 +241,7 @@ export default function VideoEditorPage() {
     useState(false);
   const [muteVideoDuringScriptPlayback, setMuteVideoDuringScriptPlayback] =
     useState(true);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [isCompilingProjectClips, setIsCompilingProjectClips] = useState(false);
   const [isExportingProjectClips, setIsExportingProjectClips] = useState(false);
   const [lastExportedCompilationPath, setLastExportedCompilationPath] =
@@ -207,14 +249,47 @@ export default function VideoEditorPage() {
   const playerRef = useRef<VideoPlayerHandle>(null);
   const projectScriptPlaybackTimerRef = useRef<number | null>(null);
 
+  const refreshUsageSnapshot = async () => {
+    try {
+      setIsRefreshingUsage(true);
+      const snapshot = await fetchAiUsageSnapshot();
+      setUsageSnapshot(snapshot);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "读取 AI 用量统计失败。"
+      );
+    } finally {
+      setIsRefreshingUsage(false);
+    }
+  };
+
   const currentProject = projects.find((item) => item.id === currentProjectId) ?? null;
   const visibleMediaItems = currentProject
     ? mediaItems.filter((item) => currentProject.materialIds.includes(item.id))
     : [];
   const selectedMedia = visibleMediaItems.find((item) => item.id === selectedMediaId);
-  const selectedStoryScenes: StoryScene[] = mapStoryOutlineToScenes(
-    selectedMedia?.storyOutline ?? []
-  );
+  const selectedStoryScenes: StoryScene[] = useMemo(() => {
+    const baseScenes = mapStoryOutlineToScenes(selectedMedia?.storyOutline ?? []);
+    const rawSrtContent = selectedMedia?.srtContent?.trim();
+
+    if (!rawSrtContent) {
+      return baseScenes;
+    }
+
+    return baseScenes.map((scene) => ({
+      ...scene,
+      subtitleEntries: extractSubtitleBlocksInRange(rawSrtContent, {
+        startSeconds: scene.seekTime,
+        endSeconds: scene.seekTime + parseTimeRangeDuration(scene.timestamp),
+      }).map((block) => ({
+        id: block.id,
+        startSeconds: block.startSeconds,
+        endSeconds: block.endSeconds,
+        timeline: block.timeline,
+        content: block.content,
+      })),
+    }));
+  }, [selectedMedia?.storyOutline, selectedMedia?.srtContent]);
   const outlineMediaOptions = useMemo(
     () =>
       visibleMediaItems
@@ -252,7 +327,8 @@ export default function VideoEditorPage() {
     previewProjectCompilation !== null &&
     previewProjectCompilationSignature === selectedProjectClipSequenceSignature;
   const hasPendingSettingsChanges =
-    JSON.stringify(settings) !== JSON.stringify(savedSettings);
+    JSON.stringify(normalizeAppSettingsValues(settings)) !==
+    JSON.stringify(normalizeAppSettingsValues(savedSettings));
   const isAuthorized = isAuthorizedStatus(authorization?.status);
   const canManageProjects = hasAuthorizedFeature(
     authorization,
@@ -363,8 +439,10 @@ export default function VideoEditorPage() {
         }
 
         setMediaItems(snapshot.materials);
-        setSettings(snapshot.settings);
-        setSavedSettings(snapshot.settings);
+        const normalizedSettings = normalizeAppSettingsValues(snapshot.settings);
+        setSettings(normalizedSettings);
+        setSavedSettings(normalizedSettings);
+        setUsageSnapshot(snapshot.usage ?? defaultUsageSnapshot);
         void loadLocalModels(snapshot.settings.localEmbeddingModelDirectory);
         setAuthorization(authorizationSnapshot);
         setProjects(nextProjects);
@@ -421,11 +499,27 @@ export default function VideoEditorPage() {
             ...previous,
             localEmbeddingModelName: matchedModel.id,
           }));
+          setSavedSettings((previous) =>
+            previous.localEmbeddingModelName === settings.localEmbeddingModelName
+              ? {
+                  ...previous,
+                  localEmbeddingModelName: matchedModel.id,
+                }
+              : previous
+          );
         } else if (models.length > 0 && !matchedModel) {
           setSettings((previous) => ({
             ...previous,
             localEmbeddingModelName: models[0].id,
           }));
+          setSavedSettings((previous) =>
+            previous.localEmbeddingModelName === settings.localEmbeddingModelName
+              ? {
+                  ...previous,
+                  localEmbeddingModelName: models[0].id,
+                }
+              : previous
+          );
         }
       } catch (error) {
         if (!isActive) {
@@ -506,6 +600,26 @@ export default function VideoEditorPage() {
       );
       throw error;
     }
+  };
+
+  const updateSceneShotAnalysisInOutline = (
+    mediaId: string,
+    sceneId: string,
+    shotAnalysis: SceneShotAnalysis
+  ) => {
+    const targetMedia = mediaItems.find((item) => item.id === mediaId);
+    if (!targetMedia?.storyOutline) {
+      return null;
+    }
+
+    return targetMedia.storyOutline.map((scene) =>
+      scene.id === sceneId
+        ? {
+            ...scene,
+            shotAnalysis,
+          }
+        : scene
+    );
   };
 
   /**
@@ -777,7 +891,14 @@ export default function VideoEditorPage() {
     }
   };
 
+  const handleSceneSubtitleSelect = (sceneId: string, time: number) => {
+    setCurrentSceneId(sceneId);
+    clearProjectPreviewPlayback();
+    playerRef.current?.seekTo(time);
+  };
+
   const handleSelectOutlineSearchResult = (result: StoryOutlineSearchResult) => {
+    setCurrentOutlineSearchResultId(result.id);
     clearProjectPreviewPlayback();
     setPlayerPendingStartTime(result.startSeconds);
 
@@ -795,6 +916,44 @@ export default function VideoEditorPage() {
     setSelectedMediaId(result.assetId);
     setCurrentSceneId(result.sceneId);
     setPendingOutlineSearchResult(result);
+  };
+
+  const handleSearchOutline = async () => {
+    if (!currentProjectId || !outlineSearchQuery.trim()) {
+      setOutlineSearchState("idle");
+      setOutlineSearchResults([]);
+      setCurrentOutlineSearchResultId(null);
+      return;
+    }
+
+    setLibraryError(null);
+    setOutlineSearchState("loading");
+    setCurrentOutlineSearchResultId(null);
+
+    try {
+      const result = await searchProjectStoryOutline(
+        currentProjectId,
+        outlineSearchQuery.trim(),
+        20
+      );
+      setOutlineSearchState(result.mode);
+      setOutlineSearchResults(result.results);
+    } catch (error) {
+      setOutlineSearchState("idle");
+      setOutlineSearchResults([]);
+      setLibraryError(
+        error instanceof Error ? error.message : "剧情大纲搜索失败。"
+      );
+    } finally {
+      void refreshUsageSnapshot();
+    }
+  };
+
+  const handleClearOutlineSearch = () => {
+    setOutlineSearchQuery("");
+    setOutlineSearchState("idle");
+    setOutlineSearchResults([]);
+    setCurrentOutlineSearchResultId(null);
   };
 
   const clearProjectScriptPlaybackTimer = () => {
@@ -855,6 +1014,8 @@ export default function VideoEditorPage() {
         error instanceof Error ? error.message : "匹配画面失败。"
       );
       return null;
+    } finally {
+      void refreshUsageSnapshot();
     }
   };
 
@@ -1350,7 +1511,9 @@ export default function VideoEditorPage() {
     setLibraryError(null);
 
     try {
-      const saved = await putSettings(settings);
+      const saved = normalizeAppSettingsValues(
+        await putSettings(normalizeAppSettingsValues(settings))
+      );
       setSettings(saved);
       setSavedSettings(saved);
     } catch (error) {
@@ -1517,7 +1680,7 @@ export default function VideoEditorPage() {
       !settings.aiModelName.trim()
     ) {
       const errorMessage =
-        "请先在设置页填写 AI API Base URL、API Key 和模型名称。";
+        "请先在设置页填写文本模型 Base URL、API Key 和模型名称。";
 
       applyLocalMediaPatch(mediaId, {
         outlineExtractionStatus: "error",
@@ -1552,6 +1715,7 @@ export default function VideoEditorPage() {
           baseUrl: settings.aiApiBaseUrl,
           apiKey: settings.aiApiKey,
           model: settings.aiModelName,
+          materialId: mediaId,
         }
       );
 
@@ -1560,17 +1724,20 @@ export default function VideoEditorPage() {
         outlineExtractionStatus: "success",
         outlineExtractionError: null,
       });
+      void refreshUsageSnapshot();
 
       setCurrentSceneId(outline[0]?.id ?? null);
 
       try {
         await indexMaterialOutline(mediaId);
+        void refreshUsageSnapshot();
       } catch (indexError) {
         setLibraryError(
           indexError instanceof Error
             ? `剧情大纲已生成，但向量索引失败：${indexError.message}`
             : "剧情大纲已生成，但向量索引失败。"
         );
+        void refreshUsageSnapshot();
       }
     } catch (error) {
       const message =
@@ -1585,6 +1752,66 @@ export default function VideoEditorPage() {
         outlineExtractionStatus: "error",
         outlineExtractionError: message,
       });
+      void refreshUsageSnapshot();
+    }
+  };
+
+  const handleGenerateSceneShotAnalysis = async (sceneId: string) => {
+    if (!selectedMediaId) {
+      return;
+    }
+
+    const targetMedia = mediaItems.find((item) => item.id === selectedMediaId);
+    const targetScene = targetMedia?.storyOutline?.find((scene) => scene.id === sceneId);
+    if (!targetMedia || !targetScene) {
+      return;
+    }
+
+    const loadingOutline = updateSceneShotAnalysisInOutline(selectedMediaId, sceneId, {
+      status: "loading",
+      error: null,
+      summary: targetScene.shotAnalysis?.summary,
+      action: targetScene.shotAnalysis?.action,
+      expressionAndGaze: targetScene.shotAnalysis?.expressionAndGaze,
+      cinematography: targetScene.shotAnalysis?.cinematography,
+      atmosphere: targetScene.shotAnalysis?.atmosphere,
+      commentaryHooks: targetScene.shotAnalysis?.commentaryHooks,
+      updatedAt: targetScene.shotAnalysis?.updatedAt,
+    });
+
+    if (loadingOutline) {
+      applyLocalMediaPatch(selectedMediaId, {
+        storyOutline: loadingOutline,
+      });
+    }
+
+    try {
+      const updatedMaterial = await generateMaterialSceneShotAnalysis(selectedMediaId, sceneId);
+      replaceMaterialInState(updatedMaterial);
+      void refreshUsageSnapshot();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "镜头解读生成失败。";
+      const errorOutline = updateSceneShotAnalysisInOutline(selectedMediaId, sceneId, {
+        status: "error",
+        error: message,
+        summary: targetScene.shotAnalysis?.summary,
+        action: targetScene.shotAnalysis?.action,
+        expressionAndGaze: targetScene.shotAnalysis?.expressionAndGaze,
+        cinematography: targetScene.shotAnalysis?.cinematography,
+        atmosphere: targetScene.shotAnalysis?.atmosphere,
+        commentaryHooks: targetScene.shotAnalysis?.commentaryHooks,
+        updatedAt: targetScene.shotAnalysis?.updatedAt,
+      });
+
+      if (errorOutline) {
+        applyLocalMediaPatch(selectedMediaId, {
+          storyOutline: errorOutline,
+        });
+        await handleUpdateMediaItem(selectedMediaId, {
+          storyOutline: errorOutline,
+        });
+      }
+      void refreshUsageSnapshot();
     }
   };
 
@@ -1644,6 +1871,12 @@ export default function VideoEditorPage() {
     setPendingOutlineSearchResult(null);
   }, [pendingOutlineSearchResult, selectedMedia?.id]);
 
+  useEffect(() => {
+    setOutlineSearchState("idle");
+    setOutlineSearchResults([]);
+    setCurrentOutlineSearchResultId(null);
+  }, [currentProjectId]);
+
   const handleVideoReady = () => {
     setPlayerPendingStartTime(null);
     setFrameHoldPreviewSrc(null);
@@ -1700,6 +1933,7 @@ export default function VideoEditorPage() {
     ? [
         "home",
         "videos",
+        "usage",
         "user",
         ...(canManageSettings ? ["settings"] : []),
       ]
@@ -1737,6 +1971,8 @@ export default function VideoEditorPage() {
           isRefreshingAuthorization={isRefreshingAuthorization}
           onRefreshAuthorization={handleRefreshAuthorization}
         />
+      ) : activeMenu === "usage" ? (
+        <UsagePanel usage={usageSnapshot} isLoading={isRefreshingUsage} />
       ) : activeMenu === "home" ? (
         <div className="flex-1 min-w-0">
           <ProjectView
@@ -1866,6 +2102,8 @@ export default function VideoEditorPage() {
                         isProjectScriptPlaybackActive &&
                         muteVideoDuringScriptPlayback
                       }
+                      playbackRate={playbackRate}
+                      onPlaybackRateChange={setPlaybackRate}
                       onReady={handleVideoReady}
                       highlight={selectedMediaHighlight}
                       onTimeChange={(time) => handlePlayerTimeChange(time)}
@@ -1925,6 +2163,16 @@ export default function VideoEditorPage() {
                     setSelectedMediaId(mediaId);
                   }}
                   onSceneSelect={handleSceneSelect}
+                  searchQuery={outlineSearchQuery}
+                  searchState={outlineSearchState}
+                  searchResults={outlineSearchResults}
+                  currentSearchResultId={currentOutlineSearchResultId}
+                  onSearchQueryChange={setOutlineSearchQuery}
+                  onSearchSubmit={handleSearchOutline}
+                  onClearSearch={handleClearOutlineSearch}
+                  onSearchResultSelect={handleSelectOutlineSearchResult}
+                  onSceneSubtitleSelect={handleSceneSubtitleSelect}
+                  onGenerateShotAnalysis={handleGenerateSceneShotAnalysis}
                 />
               </div>
             </ResizablePanel>
@@ -1939,6 +2187,15 @@ const parseTimecodeToSeconds = (timecode: string): number => {
   const [hours, minutes, seconds] = timecode.split(":").map(Number);
 
   return hours * 3600 + minutes * 60 + seconds;
+};
+
+const parseTimeRangeDuration = (timestamp: string) => {
+  const [startTimecode, endTimecode] = timestamp.split(" - ").map((value) => value.trim());
+  if (!startTimecode || !endTimecode) {
+    return 0;
+  }
+
+  return Math.max(parseTimecodeToSeconds(endTimecode) - parseTimecodeToSeconds(startTimecode), 0);
 };
 
 const parseProjectScriptItemOrder = (raw: string | undefined) => {

@@ -9,6 +9,55 @@ export type ProjectEmbeddingModelSource = "remote" | "local";
 
 export type CrossAssetSwitchMode = "frame_hold" | "preload";
 
+export type AiUsageProvider =
+  | "openai_compatible"
+  | "dashscope"
+  | "local_embedding"
+  | "system_tts";
+
+export type AiUsageStatus = "success" | "error";
+
+export type AiUsageAction =
+  | "story_outline_generation"
+  | "story_outline_embedding_index"
+  | "story_outline_embedding_search"
+  | "story_outline_llm_search"
+  | "scene_shot_analysis"
+  | "project_script_tts";
+
+export interface PersistedAiUsageRecord {
+  id: string;
+  action: AiUsageAction;
+  provider: AiUsageProvider;
+  model: string;
+  endpoint: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  inputCount: number | null;
+  status: AiUsageStatus;
+  errorMessage: string | null;
+  projectId: string | null;
+  materialId: string | null;
+  sceneId: string | null;
+  metadata?: Record<string, string | number | boolean | null>;
+  createdAt: string;
+}
+
+export interface PersistedAiUsageSummary {
+  totalCalls: number;
+  successCalls: number;
+  errorCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+}
+
+export interface PersistedAiUsageSnapshot {
+  summary: PersistedAiUsageSummary;
+  records: PersistedAiUsageRecord[];
+}
+
 /**
  * 持久化层的应用设置。
  *
@@ -22,6 +71,10 @@ export interface PersistedAppSettings {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;
+  aiVisionBaseUrl: string;
+  aiVisionApiKey: string;
+  aiVisionModelName: string;
+  aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
   aiEmbeddingModelName: string;
   localEmbeddingModelDirectory: string;
@@ -159,6 +212,7 @@ export interface PersistedLibrarySnapshot {
   settings: PersistedAppSettings;
   materials: PersistedMaterial[];
   projects: PersistedProject[];
+  usage: PersistedAiUsageSnapshot;
 }
 
 export interface MaterialPatchInput {

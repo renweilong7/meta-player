@@ -8,7 +8,26 @@ import {
 import { Play, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { CrossAssetSwitchMode } from "@/lib/persistence/types";
+
+const PLAYBACK_RATE_OPTIONS = [
+  { value: "0.5", label: "0.5x" },
+  { value: "0.75", label: "0.75x" },
+  { value: "1", label: "1x" },
+  { value: "1.25", label: "1.25x" },
+  { value: "1.5", label: "1.5x" },
+  { value: "2", label: "2x" },
+] as const;
+
+const normalizePlaybackRate = (value: number | undefined) =>
+  typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 1;
 
 interface VideoPlayerProps {
   title?: string;
@@ -23,6 +42,8 @@ interface VideoPlayerProps {
   frameHoldPreviewSrc?: string | null;
   crossAssetSwitchMode?: CrossAssetSwitchMode;
   autoPlay?: boolean;
+  playbackRate?: number;
+  onPlaybackRateChange?: (rate: number) => void;
   onReady?: () => void;
   onTimeChange?: (time: number, duration: number) => void;
 }
@@ -50,6 +71,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
     frameHoldPreviewSrc,
     crossAssetSwitchMode = "frame_hold",
     autoPlay = false,
+    playbackRate = 1,
+    onPlaybackRateChange,
     onReady,
     onTimeChange,
   },
@@ -61,6 +84,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
   const preloadVideoRef = useRef<HTMLVideoElement>(null);
   const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
   const [showThumbnailRail, setShowThumbnailRail] = useState(false);
+  const normalizedPlaybackRate = normalizePlaybackRate(playbackRate);
   const defaultHighlight = useMemo(
     () => ({
       30: "30 秒检查点",
@@ -214,6 +238,21 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
           {title || "播放器"}
         </h2>
         <div className="flex items-center gap-3">
+          <Select
+            value={String(normalizedPlaybackRate)}
+            onValueChange={(value) => onPlaybackRateChange?.(Number(value))}
+          >
+            <SelectTrigger className="h-8 w-[92px] text-xs">
+              <SelectValue placeholder="倍速" />
+            </SelectTrigger>
+            <SelectContent>
+              {PLAYBACK_RATE_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <div className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5">
             <span className="text-xs text-muted-foreground">
               Thumbnail Rail（测试功能）
@@ -254,6 +293,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
                 pendingStartTime={pendingStartTime}
                 autoPlay={autoPlay}
                 muted={muted}
+                playbackRate={normalizedPlaybackRate}
                 highlight={highlight ?? defaultHighlight}
                 showThumbnailRail={showThumbnailRail}
                 onTimeChange={onTimeChange}

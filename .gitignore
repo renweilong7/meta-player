@@ -22,6 +22,7 @@ tsconfig.tsbuildinfo
 .codex/
 dist/
 release/
+.python-runtime/
 
 # Session-local agent artifacts
 .agents/skills/electron/

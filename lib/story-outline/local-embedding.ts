@@ -5,24 +5,12 @@ import {
   LocalEmbeddingModelOption,
   PersistedAppSettings,
 } from "@/lib/persistence/types";
-
-const getElectronResourcesPath = () =>
-  (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ?? null;
-
-const getBundledModelRoots = () => {
-  const roots = [
-    join(process.cwd(), "models", "embeddings"),
-    join(process.cwd(), "..", "models", "embeddings"),
-  ];
-  const electronResourcesPath = getElectronResourcesPath();
-
-  if (electronResourcesPath) {
-    roots.push(join(electronResourcesPath, "models", "embeddings"));
-    roots.push(join(electronResourcesPath, "app", "models", "embeddings"));
-  }
-
-  return roots.filter((root, index, list) => list.indexOf(root) === index);
-};
+import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
+import {
+  getDefaultLocalEmbeddingModelDirectory,
+  resolveBundledPythonExecutable,
+  resolveBundledScriptPath,
+} from "@/lib/runtime/resource-paths";
 
 const isValidModelDirectory = (absolutePath: string) => {
   if (!existsSync(absolutePath) || !statSync(absolutePath).isDirectory()) {
@@ -73,16 +61,13 @@ const scanModelRoot = (
 export const listLocalEmbeddingModels = (
   customModelDirectory?: string
 ): LocalEmbeddingModelOption[] => {
-  const bundled = getBundledModelRoots().flatMap((rootPath) =>
-    scanModelRoot(rootPath, "bundled")
-  );
-  const custom = customModelDirectory?.trim()
-    ? scanModelRoot(customModelDirectory.trim(), "custom")
-    : [];
+  const effectiveModelDirectory =
+    customModelDirectory?.trim() || getDefaultLocalEmbeddingModelDirectory();
+  const custom = scanModelRoot(effectiveModelDirectory, "custom");
 
   const deduped = new Map<string, LocalEmbeddingModelOption>();
 
-  [...bundled, ...custom].forEach((model) => {
+  custom.forEach((model) => {
     deduped.set(model.id, model);
   });
 
@@ -122,17 +107,32 @@ export const generateLocalEmbeddings = async (
   settings: Pick<
     PersistedAppSettings,
     "localEmbeddingModelDirectory" | "localEmbeddingModelName"
-  >
+  >,
+  context?: {
+    projectId?: string;
+    materialId?: string;
+    action?: "story_outline_embedding_index" | "story_outline_embedding_search";
+  }
 ) => {
   if (inputs.length === 0) {
     return [] as number[][];
   }
 
   const model = resolveLocalEmbeddingModel(settings);
-  const scriptPath = join(process.cwd(), "scripts", "local_embedding_service.py");
+  const scriptPath = resolveBundledScriptPath("local_embedding_service.py");
+  const pythonExecutable = resolveBundledPythonExecutable();
+  const action = context?.action ?? "story_outline_embedding_index";
+
+  if (!scriptPath) {
+    throw new Error("未找到本地 Embedding Python 脚本，请重新打包应用。");
+  }
+
+  if (!pythonExecutable) {
+    throw new Error("未找到内置 Python 运行环境，请重新打包应用。");
+  }
 
   return new Promise<number[][]>((resolve, reject) => {
-    const child = spawn("python3", [scriptPath], {
+    const child = spawn(pythonExecutable, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -148,11 +148,33 @@ export const generateLocalEmbeddings = async (
     });
 
     child.on("error", (error) => {
+      safeRecordAiUsageEvent({
+        action,
+        provider: "local_embedding",
+        model: model.name,
+        endpoint: scriptPath,
+        status: "error",
+        errorMessage: error.message,
+        inputCount: inputs.length,
+        projectId: context?.projectId,
+        materialId: context?.materialId,
+      });
       reject(error);
     });
 
     child.on("close", (code) => {
       if (code !== 0) {
+        safeRecordAiUsageEvent({
+          action,
+          provider: "local_embedding",
+          model: model.name,
+          endpoint: scriptPath,
+          status: "error",
+          errorMessage: stderr.trim() || "本地 Embedding Python 服务执行失败。",
+          inputCount: inputs.length,
+          projectId: context?.projectId,
+          materialId: context?.materialId,
+        });
         reject(new Error(stderr.trim() || "本地 Embedding Python 服务执行失败。"));
         return;
       }
@@ -172,12 +194,50 @@ export const generateLocalEmbeddings = async (
             (item) => !Array.isArray(item) || item.some((value) => typeof value !== "number")
           )
         ) {
+          safeRecordAiUsageEvent({
+            action,
+            provider: "local_embedding",
+            model: model.name,
+            endpoint: scriptPath,
+            status: "error",
+            errorMessage: "本地 Embedding 模型返回的向量格式无效。",
+            inputCount: inputs.length,
+            projectId: context?.projectId,
+            materialId: context?.materialId,
+          });
           reject(new Error("本地 Embedding 模型返回的向量格式无效。"));
           return;
         }
 
+        safeRecordAiUsageEvent({
+          action,
+          provider: "local_embedding",
+          model: model.name,
+          endpoint: scriptPath,
+          status: "success",
+          inputCount: inputs.length,
+          projectId: context?.projectId,
+          materialId: context?.materialId,
+          metadata: {
+            vectorCount: embeddings.length,
+            dimension:
+              typeof payload.dimension === "number" ? payload.dimension : embeddings[0]?.length ?? 0,
+          },
+        });
         resolve(embeddings);
       } catch (error) {
+        safeRecordAiUsageEvent({
+          action,
+          provider: "local_embedding",
+          model: model.name,
+          endpoint: scriptPath,
+          status: "error",
+          errorMessage:
+            error instanceof Error ? error.message : "本地 Embedding 结果解析失败。",
+          inputCount: inputs.length,
+          projectId: context?.projectId,
+          materialId: context?.materialId,
+        });
         reject(error);
       }
     });

@@ -1,0 +1,107 @@
+import { existsSync, mkdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+
+const getElectronResourcesPath = () =>
+  (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ?? null;
+
+const dedupePaths = (paths: Array<string | null | undefined>) => {
+  const uniquePaths = new Set<string>();
+
+  paths.forEach((candidate) => {
+    if (!candidate || !candidate.trim()) {
+      return;
+    }
+
+    uniquePaths.add(resolve(candidate));
+  });
+
+  return [...uniquePaths];
+};
+
+const isExistingPath = (candidate: string | null | undefined): candidate is string =>
+  typeof candidate === "string" && candidate.trim().length > 0 && existsSync(candidate);
+
+export const getAppDataDirectory = () =>
+  process.env.META_PLAYER_DATA_DIR?.trim() || join(process.cwd(), ".meta-player");
+
+export const getDefaultLocalEmbeddingModelDirectory = () => {
+  const directory = join(getAppDataDirectory(), "models", "embeddings");
+  mkdirSync(directory, { recursive: true });
+  return directory;
+};
+
+const getBundledAppRootCandidates = () => {
+  const electronResourcesPath = getElectronResourcesPath();
+
+  return dedupePaths([
+    process.cwd(),
+    join(process.cwd(), ".."),
+    join(process.cwd(), "..", ".."),
+    join(process.cwd(), "dist", "app"),
+    join(process.cwd(), "..", "dist", "app"),
+    electronResourcesPath ? join(electronResourcesPath, "app") : null,
+    electronResourcesPath ? join(electronResourcesPath, "app", "dist", "app") : null,
+  ]);
+};
+
+export const resolveBundledScriptPath = (scriptName: string) => {
+  const electronResourcesPath = getElectronResourcesPath();
+  const candidates = [
+    ...getBundledAppRootCandidates().map((rootPath) => join(rootPath, "scripts", scriptName)),
+    electronResourcesPath ? join(electronResourcesPath, "python-scripts", scriptName) : null,
+  ];
+
+  return candidates.find(isExistingPath) ?? null;
+};
+
+export const resolveBundledPythonExecutable = () => {
+  const explicitExecutable = process.env.META_PLAYER_PYTHON_EXECUTABLE?.trim();
+  const electronResourcesPath = getElectronResourcesPath();
+  const executableName = process.platform === "win32" ? "python.exe" : "python3";
+  const fallbackExecutable = process.platform === "win32" ? "python" : "python3";
+  const bundledExecutablePaths = [
+    ...getBundledAppRootCandidates().map((rootPath) =>
+      join(
+        rootPath,
+        "python",
+        process.platform === "win32" ? "Scripts" : "bin",
+        executableName
+      )
+    ),
+    electronResourcesPath
+      ? join(
+          electronResourcesPath,
+          "python",
+          process.platform === "win32" ? "Scripts" : "bin",
+          executableName
+        )
+      : null,
+  ];
+
+  const resolvedExecutable =
+    [explicitExecutable, ...bundledExecutablePaths].find(isExistingPath) ?? null;
+
+  if (resolvedExecutable) {
+    return resolvedExecutable;
+  }
+
+  return process.env.NODE_ENV === "production" ? null : fallbackExecutable;
+};
+
+export const resolveBundledSqliteVecPath = (filename: string) => {
+  const explicitPath = process.env.META_PLAYER_SQLITE_VEC_PATH?.trim();
+  const platformDirectory = `${process.platform}-${process.arch}`;
+  const electronResourcesPath = getElectronResourcesPath();
+  const candidates = [
+    explicitPath,
+    ...getBundledAppRootCandidates().map((rootPath) =>
+      join(rootPath, "bin", "sqlite-vec", platformDirectory, filename)
+    ),
+    ...getBundledAppRootCandidates().map((rootPath) =>
+      join(rootPath, "sqlite-vec", platformDirectory, filename)
+    ),
+    electronResourcesPath ? join(electronResourcesPath, "sqlite-vec", platformDirectory, filename) : null,
+  ];
+
+  return candidates.find(isExistingPath) ?? null;
+};

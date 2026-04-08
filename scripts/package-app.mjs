@@ -1,4 +1,12 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,8 +19,11 @@ const standaloneStaticRoot = join(standaloneRoot, ".next", "static");
 const buildStaticRoot = join(projectRoot, ".next", "static");
 const publicRoot = join(projectRoot, "public");
 const electronRoot = join(projectRoot, "electron");
+const scriptsRoot = join(projectRoot, "scripts");
 const sqliteVecRoot = join(projectRoot, "bin", "sqlite-vec");
-const embeddingModelsRoot = join(projectRoot, "models", "embeddings");
+const pythonRuntimeRoot = resolve(
+  process.env.META_PLAYER_PYTHON_RUNTIME_PATH?.trim() || join(projectRoot, ".python-runtime")
+);
 const packageJsonPath = join(projectRoot, "package.json");
 
 if (!existsSync(standaloneRoot)) {
@@ -40,15 +51,30 @@ if (existsSync(publicRoot)) {
 
 cpSync(electronRoot, join(distRoot, "electron"), { recursive: true });
 
+if (existsSync(scriptsRoot)) {
+  const distScriptsRoot = join(distRoot, "scripts");
+  mkdirSync(distScriptsRoot, { recursive: true });
+
+  readdirSync(scriptsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".py"))
+    .forEach((entry) => {
+      cpSync(join(scriptsRoot, entry.name), join(distScriptsRoot, entry.name));
+    });
+}
+
 if (existsSync(sqliteVecRoot)) {
   cpSync(sqliteVecRoot, join(distRoot, "sqlite-vec"), { recursive: true });
 }
 
-if (existsSync(embeddingModelsRoot)) {
-  cpSync(embeddingModelsRoot, join(distRoot, "models", "embeddings"), {
-    recursive: true,
-  });
+if (!existsSync(pythonRuntimeRoot)) {
+  throw new Error(
+    `Missing embedded Python runtime at ${pythonRuntimeRoot}. Run \`npm run prepare:python-runtime\` first.`
+  );
 }
+
+cpSync(pythonRuntimeRoot, join(distRoot, "python"), {
+  recursive: true,
+});
 
 const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 

@@ -6,6 +6,7 @@ import {
   Film,
   User,
   Settings,
+  ChartColumn,
 } from "lucide-react";
 import {
   Tooltip,
@@ -26,6 +27,7 @@ const menuItems = [
 ];
 
 const bottomItems = [
+  { id: "usage", icon: ChartColumn, label: "用量" },
   { id: "user", icon: User, label: "用户" },
   { id: "settings", icon: Settings, label: "设置" },
 ];

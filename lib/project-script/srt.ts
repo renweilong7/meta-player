@@ -13,6 +13,17 @@ export interface ProjectScriptBlock {
   content: string;
 }
 
+export interface ProjectScriptSubtitleBlock {
+  id: string;
+  index: number;
+  source: "srt";
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  timeline: string;
+  content: string;
+}
+
 export interface CombinedProjectScriptState {
   scriptSrtContent: string;
   scriptMatchResults: Record<string, PersistedProjectScriptMatchResult>;
@@ -53,7 +64,7 @@ export const parseProjectScriptBlocks = (raw: string): ProjectScriptBlock[] => {
     return [];
   }
 
-  const srtBlocks = normalized
+  const srtBlocks: ProjectScriptSubtitleBlock[] = normalized
     .split(/\n\s*\n/)
     .map((block, index) => {
       const lines = block
@@ -79,6 +90,9 @@ export const parseProjectScriptBlocks = (raw: string): ProjectScriptBlock[] => {
 
       const startSeconds = parseSrtTimeToSeconds(startRaw);
       const endSeconds = endRaw ? parseSrtTimeToSeconds(endRaw) : null;
+      if (endSeconds === null) {
+        return null;
+      }
 
       return {
         id: getProjectScriptBlockId("srt", index),
@@ -87,12 +101,12 @@ export const parseProjectScriptBlocks = (raw: string): ProjectScriptBlock[] => {
         startSeconds,
         endSeconds,
         durationSeconds:
-          endSeconds !== null ? Math.max(endSeconds - startSeconds, 0) : 0,
+          Math.max(endSeconds - startSeconds, 0),
         timeline: `${startRaw} - ${endRaw}`,
         content,
       };
     })
-    .filter((item): item is ProjectScriptBlock => item !== null);
+    .filter((item): item is ProjectScriptSubtitleBlock => item !== null);
 
   if (srtBlocks.length > 0) {
     return srtBlocks;
@@ -113,6 +127,18 @@ export const parseProjectScriptBlocks = (raw: string): ProjectScriptBlock[] => {
       content: line,
     }));
 };
+
+export const extractSubtitleBlocksInRange = (
+  raw: string,
+  range: { startSeconds: number; endSeconds: number }
+): ProjectScriptSubtitleBlock[] =>
+  parseProjectScriptBlocks(raw).filter(
+    (block): block is ProjectScriptSubtitleBlock =>
+      block.source === "srt" &&
+      block.endSeconds !== null &&
+      block.startSeconds < range.endSeconds &&
+      block.endSeconds > range.startSeconds
+  );
 
 export const serializeProjectScriptBlocks = (blocks: ProjectScriptBlock[]) => {
   if (blocks.length === 0) {

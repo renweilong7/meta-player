@@ -134,7 +134,7 @@ Meta Player 当前采用基础授权与高级授权两档能力分层。
 npm install
 ```
 
-如果要启用本地 Embedding 模型推理，还需要准备 Python 依赖：
+如果要启用本地 Embedding 模型推理，开发环境仍需要准备 Python 依赖：
 
 ```bash
 pip install -r requirements-local-embedding.txt
@@ -163,13 +163,12 @@ bin/sqlite-vec/win32-x64/vec0.dll
 META_PLAYER_SQLITE_VEC_PATH=/absolute/path/to/vec0.dylib npm run electron:dev
 ```
 
-项目自带本地 Embedding 模型请放在：
+本地 Embedding 模型请放在设置页指定的“本地 Embedding 模型目录”下，应用会扫描该目录下的一级子目录。
+打包版默认建议放到应用数据目录中的：
 
 ```text
-models/embeddings/<model-name>/
+.meta-player/models/embeddings/<model-name>/
 ```
-
-用户自定义模型可放在任意目录，然后在设置页指定“本地 Embedding 模型目录”。应用会扫描该目录下的一级子目录。
 
 ### 构建应用
 
@@ -213,7 +212,8 @@ npm run dist:mac
 - 禁止页面打开新窗口
 - 生产环境关闭 `nodeIntegration`，开启 `contextIsolation`
 
-打包时如果仓库内存在 `bin/sqlite-vec/`，会自动把动态库带入应用产物，供本地向量检索使用。
+打包时会把 `bin/sqlite-vec/` 对应平台的动态库、内置 Python 运行环境和 Python 脚本一起带入应用产物。
+打包命令会先执行 `npm run prepare:python-runtime`，在项目根目录生成 `.python-runtime/`，再把它打进安装包。
 
 ## 目录结构
 

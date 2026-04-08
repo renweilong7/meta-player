@@ -42,6 +42,10 @@ export interface AppSettingsValues {
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;
+  aiVisionBaseUrl: string;
+  aiVisionApiKey: string;
+  aiVisionModelName: string;
+  aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
   aiEmbeddingModelName: string;
   localEmbeddingModelDirectory: string;
@@ -81,12 +85,17 @@ export function SettingsPanel({
   onRefreshLocalEmbeddingModels,
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showVisionApiKey, setShowVisionApiKey] = useState(false);
   const normalizedValues: AppSettingsValues = {
     materialSavePath: values.materialSavePath ?? "",
     defaultManagedImport: values.defaultManagedImport ?? false,
     aiApiBaseUrl: values.aiApiBaseUrl ?? "",
     aiApiKey: values.aiApiKey ?? "",
     aiModelName: values.aiModelName ?? "",
+    aiVisionBaseUrl: values.aiVisionBaseUrl ?? "",
+    aiVisionApiKey: values.aiVisionApiKey ?? "",
+    aiVisionModelName: values.aiVisionModelName ?? "",
+    aiVisionFps: values.aiVisionFps ?? "2",
     storySearchProvider: values.storySearchProvider ?? "remote_embedding",
     aiEmbeddingModelName: values.aiEmbeddingModelName ?? "",
     localEmbeddingModelDirectory: values.localEmbeddingModelDirectory ?? "",
@@ -206,236 +215,375 @@ export function SettingsPanel({
             </CardHeader>
             <CardContent className="pt-6">
               <FieldGroup>
-                <Field>
-                  <FieldLabel htmlFor="ai-api-base-url">
-                    AI API Base URL
-                  </FieldLabel>
-                  <FieldContent>
-                    <div className="relative">
-                      <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        id="ai-api-base-url"
-                        value={normalizedValues.aiApiBaseUrl}
-                        onChange={(event) =>
-                          onChangeField("aiApiBaseUrl", event.target.value)
-                        }
-                        placeholder="https://api.openai.com/v1"
-                        className="h-10 pl-9"
-                      />
-                    </div>
-                    <FieldDescription>
-                      兼容 OpenAI 格式即可，例如官方接口或自部署网关。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="story-search-provider">剧情搜索方案</FieldLabel>
-                  <FieldContent>
-                    <Select
-                      value={normalizedValues.storySearchProvider}
-                      onValueChange={(value) =>
-                        onChangeField("storySearchProvider", value as StorySearchProvider)
-                      }
-                    >
-                      <SelectTrigger id="story-search-provider" className="h-10 w-full">
-                        <SelectValue placeholder="选择剧情搜索方案" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
-                        <SelectItem value="local_embedding">
-                          本地 Embedding 模型（测试功能）
-                        </SelectItem>
-                        <SelectItem value="llm">直接大模型搜索</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>
-                      当前已实现远端 Embedding API 和直接大模型搜索；本地模型为测试功能。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="ai-model-name">AI 模型名称</FieldLabel>
-                  <FieldContent>
-                    <div className="relative">
-                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        id="ai-model-name"
-                        value={normalizedValues.aiModelName}
-                        onChange={(event) =>
-                          onChangeField("aiModelName", event.target.value)
-                        }
-                        placeholder="gpt-4o-mini"
-                        className="h-10 pl-9"
-                      />
-                    </div>
-                    <FieldDescription>
-                      指定用于提取剧情大纲的模型名称，后续其他 AI 能力也可复用该配置。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="ai-embedding-model-name">
-                    Embedding 模型名称
-                  </FieldLabel>
-                  <FieldContent>
-                    <div className="relative">
-                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        id="ai-embedding-model-name"
-                        value={normalizedValues.aiEmbeddingModelName}
-                        onChange={(event) =>
-                          onChangeField("aiEmbeddingModelName", event.target.value)
-                        }
-                        placeholder="text-embedding-3-small"
-                        className="h-10 pl-9"
-                      />
-                    </div>
-                    <FieldDescription>
-                      作为新建项目时默认使用的远端 Embedding 模型名称。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="local-embedding-model-directory">
-                    本地 Embedding 模型目录（测试功能）
-                  </FieldLabel>
-                  <FieldContent>
-                    <div className="flex flex-col gap-3 md:flex-row">
-                      <Input
-                        id="local-embedding-model-directory"
-                        value={normalizedValues.localEmbeddingModelDirectory}
-                        onChange={(event) =>
-                          onChangeField("localEmbeddingModelDirectory", event.target.value)
-                        }
-                        placeholder="/Users/renyi/Models/embeddings"
-                        className="h-10"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="md:w-auto"
-                        onClick={onBrowseLocalEmbeddingModelDirectory}
-                      >
-                        <FolderOpen className="h-4 w-4" />
-                        选择目录
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="md:w-auto"
-                        onClick={onRefreshLocalEmbeddingModels}
-                        disabled={isLoadingLocalEmbeddingModels}
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                        刷新模型
-                      </Button>
-                    </div>
-                    <FieldDescription>
-                      测试功能：应用会扫描这个目录下的一级子目录，并与项目自带模型一起提供选择。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="local-embedding-model-name">
-                    本地 Embedding 模型（测试功能）
-                  </FieldLabel>
-                  <FieldContent>
-                    <Select
-                      value={normalizedValues.localEmbeddingModelName}
-                      onValueChange={(value) =>
-                        onChangeField("localEmbeddingModelName", value)
-                      }
-                    >
-                      <SelectTrigger
-                        id="local-embedding-model-name"
-                        className="h-10 w-full"
-                      >
-                        <SelectValue placeholder="选择本地 Embedding 模型（测试功能）" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {localEmbeddingModels.map((model) => (
-                          <SelectItem key={model.id} value={model.id}>
-                            {model.name}（测试功能）
-                            {model.source === "custom" ? " · 自定义" : " · 内置"}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>
-                      {isLoadingLocalEmbeddingModels
-                        ? "正在扫描本地 Embedding 模型（测试功能）..."
-                        : localEmbeddingModels.length > 0
-                          ? "测试功能：作为新建项目时默认使用的本地 Embedding 模型。"
-                          : "测试功能：当前未扫描到可用模型，请检查模型目录或内置模型资源。"}
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="ai-search-model-name">
-                    大模型搜索模型名称
-                  </FieldLabel>
-                  <FieldContent>
-                    <div className="relative">
-                      <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        id="ai-search-model-name"
-                        value={normalizedValues.aiSearchModelName}
-                        onChange={(event) =>
-                          onChangeField("aiSearchModelName", event.target.value)
-                        }
-                        placeholder="gpt-4o-mini"
-                        className="h-10 pl-9"
-                      />
-                    </div>
-                    <FieldDescription>
-                      指定直接调用大模型执行剧情搜索时使用的模型名称。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
-
-                <Field>
-                  <FieldLabel htmlFor="ai-api-key">AI API Key</FieldLabel>
-                  <FieldContent>
-                    <div className="flex gap-3">
-                      <div className="relative flex-1">
-                        <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <div className="rounded-lg border border-border/70 p-4">
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-foreground">文本模型</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      用于剧情大纲提取等通用文本任务。
+                    </p>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="ai-api-base-url">
+                      文本模型 Base URL
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input
-                          id="ai-api-key"
-                          value={normalizedValues.aiApiKey}
+                          id="ai-api-base-url"
+                          value={normalizedValues.aiApiBaseUrl}
                           onChange={(event) =>
-                            onChangeField("aiApiKey", event.target.value)
+                            onChangeField("aiApiBaseUrl", event.target.value)
                           }
-                          type={showApiKey ? "text" : "password"}
-                          placeholder="sk-..."
-                          className="h-10 pl-9 pr-11"
+                          placeholder="https://api.openai.com/v1"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        兼容 OpenAI 格式即可，例如官方接口或自部署网关。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-model-name">文本模型名称</FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-model-name"
+                          value={normalizedValues.aiModelName}
+                          onChange={(event) =>
+                            onChangeField("aiModelName", event.target.value)
+                          }
+                          placeholder="gpt-4o-mini"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        指定用于提取剧情大纲等纯文本任务的模型名称。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-api-key">文本模型 API Key</FieldLabel>
+                    <FieldContent>
+                      <div className="flex gap-3">
+                        <div className="relative flex-1">
+                          <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="ai-api-key"
+                            value={normalizedValues.aiApiKey}
+                            onChange={(event) =>
+                              onChangeField("aiApiKey", event.target.value)
+                            }
+                            type={showApiKey ? "text" : "password"}
+                            placeholder="sk-..."
+                            className="h-10 pl-9 pr-11"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-1 top-1 h-8 w-8"
+                            onClick={() => setShowApiKey((current) => !current)}
+                            aria-label={
+                              showApiKey
+                                ? "隐藏文本模型 API Key"
+                                : "显示文本模型 API Key"
+                            }
+                          >
+                            {showApiKey ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <FieldDescription>
+                        文本任务单独使用的 API Key。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                </div>
+
+                <div className="rounded-lg border border-border/70 p-4">
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-foreground">
+                      检索与 Embedding
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      将剧情搜索方案、远端 Embedding 和本地 Embedding 模型集中到同一组，避免和文本/视觉模型混排。
+                    </p>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="story-search-provider">剧情搜索方案</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={normalizedValues.storySearchProvider}
+                        onValueChange={(value) =>
+                          onChangeField("storySearchProvider", value as StorySearchProvider)
+                        }
+                      >
+                        <SelectTrigger id="story-search-provider" className="h-10 w-full">
+                          <SelectValue placeholder="选择剧情搜索方案" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
+                          <SelectItem value="local_embedding">
+                            本地 Embedding 模型（测试功能）
+                          </SelectItem>
+                          <SelectItem value="llm">直接大模型搜索</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        当前已实现远端 Embedding API 和直接大模型搜索；本地模型为测试功能。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-embedding-model-name">
+                      远端 Embedding 模型名称
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-embedding-model-name"
+                          value={normalizedValues.aiEmbeddingModelName}
+                          onChange={(event) =>
+                            onChangeField("aiEmbeddingModelName", event.target.value)
+                          }
+                          placeholder="text-embedding-3-small"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        作为新建项目时默认使用的远端 Embedding 模型名称。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="local-embedding-model-directory">
+                      本地 Embedding 模型目录（测试功能）
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="flex flex-col gap-3 md:flex-row">
+                        <Input
+                          id="local-embedding-model-directory"
+                          value={normalizedValues.localEmbeddingModelDirectory}
+                          onChange={(event) =>
+                            onChangeField("localEmbeddingModelDirectory", event.target.value)
+                          }
+                          placeholder="/Users/renyi/Models/embeddings"
+                          className="h-10"
                         />
                         <Button
                           type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="absolute right-1 top-1 h-8 w-8"
-                          onClick={() => setShowApiKey((current) => !current)}
-                          aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                          variant="outline"
+                          className="md:w-auto"
+                          onClick={onBrowseLocalEmbeddingModelDirectory}
                         >
-                          {showApiKey ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
+                          <FolderOpen className="h-4 w-4" />
+                          选择目录
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="md:w-auto"
+                          onClick={onRefreshLocalEmbeddingModels}
+                          disabled={isLoadingLocalEmbeddingModels}
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                          刷新模型
                         </Button>
                       </div>
-                    </div>
-                    <FieldDescription>
-                      当前仅做 UI 预留，后续建议接入安全存储而不是明文落盘。
-                    </FieldDescription>
-                  </FieldContent>
-                </Field>
+                      <FieldDescription>
+                        应用会扫描这个目录下的一级子目录。打包版建议把模型手动放到这里，再点“刷新模型”。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="local-embedding-model-name">
+                      本地 Embedding 模型（测试功能）
+                    </FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={normalizedValues.localEmbeddingModelName}
+                        onValueChange={(value) =>
+                          onChangeField("localEmbeddingModelName", value)
+                        }
+                      >
+                        <SelectTrigger
+                          id="local-embedding-model-name"
+                          className="h-10 w-full"
+                        >
+                          <SelectValue placeholder="选择本地 Embedding 模型（测试功能）" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {localEmbeddingModels.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.name}（测试功能）
+                              {model.source === "custom" ? " · 本地目录" : " · 内置"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        {isLoadingLocalEmbeddingModels
+                          ? "正在扫描本地 Embedding 模型（测试功能）..."
+                          : localEmbeddingModels.length > 0
+                            ? "测试功能：作为新建项目时默认使用的本地 Embedding 模型。"
+                            : "测试功能：当前未扫描到可用模型，请检查模型目录中是否已放入完整模型。"}
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-search-model-name">
+                      大模型搜索模型名称
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-search-model-name"
+                          value={normalizedValues.aiSearchModelName}
+                          onChange={(event) =>
+                            onChangeField("aiSearchModelName", event.target.value)
+                          }
+                          placeholder="gpt-4o-mini"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        指定直接调用大模型执行剧情搜索时使用的模型名称。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                </div>
+
+                <div className="rounded-lg border border-border/70 p-4">
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-foreground">视觉模型</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      用于镜头解读和视频理解任务，支持单独配置 API 地址、模型和 FPS。
+                    </p>
+                  </div>
+                  <Field>
+                    <FieldLabel htmlFor="ai-vision-base-url">
+                      视觉模型 Base URL
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-vision-base-url"
+                          value={normalizedValues.aiVisionBaseUrl}
+                          onChange={(event) =>
+                            onChangeField("aiVisionBaseUrl", event.target.value)
+                          }
+                          placeholder="https://dashscope.aliyuncs.com/api/v1"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        镜头解读通过 DashScope Python SDK 调用本地视频上传，请填写对应地域的 API 地址。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-vision-model-name">
+                      视觉模型名称
+                    </FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-vision-model-name"
+                          value={normalizedValues.aiVisionModelName}
+                          onChange={(event) =>
+                            onChangeField("aiVisionModelName", event.target.value)
+                          }
+                          placeholder="qwen3.6-plus"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        用于镜头解读的视频多模态模型名称，例如百炼视觉模型。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-vision-fps">镜头解读 FPS</FieldLabel>
+                    <FieldContent>
+                      <div className="relative">
+                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          id="ai-vision-fps"
+                          value={normalizedValues.aiVisionFps}
+                          onChange={(event) =>
+                            onChangeField("aiVisionFps", event.target.value)
+                          }
+                          placeholder="2"
+                          className="h-10 pl-9"
+                        />
+                      </div>
+                      <FieldDescription>
+                        控制视频抽帧频率，默认 2，建议范围 0.1 到 10。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="ai-vision-api-key">视觉模型 API Key</FieldLabel>
+                    <FieldContent>
+                      <div className="flex gap-3">
+                        <div className="relative flex-1">
+                          <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            id="ai-vision-api-key"
+                            value={normalizedValues.aiVisionApiKey}
+                            onChange={(event) =>
+                              onChangeField("aiVisionApiKey", event.target.value)
+                            }
+                            type={showVisionApiKey ? "text" : "password"}
+                            placeholder="sk-..."
+                            className="h-10 pl-9 pr-11"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="absolute right-1 top-1 h-8 w-8"
+                            onClick={() => setShowVisionApiKey((current) => !current)}
+                            aria-label={
+                              showVisionApiKey
+                                ? "隐藏视觉模型 API Key"
+                                : "显示视觉模型 API Key"
+                            }
+                          >
+                            {showVisionApiKey ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <FieldDescription>
+                        视觉任务单独使用的 API Key。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                </div>
               </FieldGroup>
             </CardContent>
           </Card>

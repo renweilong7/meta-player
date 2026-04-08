@@ -9,6 +9,7 @@ import {
   listProjectScriptItemsByProjectId,
   updateProjectScriptItemTts,
 } from "@/lib/persistence/repository";
+import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
 
 const execFileAsync = promisify(execFile);
 const runningProjectIds = new Set<string>();
@@ -60,11 +61,38 @@ const generateItemAudio = async (input: {
       ttsError: null,
       audioPath: outputPath,
     });
+    safeRecordAiUsageEvent({
+      action: "project_script_tts",
+      provider: "system_tts",
+      model: input.voice,
+      endpoint: "/usr/bin/say",
+      status: "success",
+      inputCount: 1,
+      projectId: input.projectId,
+      metadata: {
+        itemId: input.item.id,
+        textLength: input.item.content.length,
+      },
+    });
   } catch (error) {
     await updateProjectScriptItemTts(input.item.id, {
       ttsStatus: "error",
       ttsError: error instanceof Error ? error.message : "TTS 生成失败。",
       audioPath: null,
+    });
+    safeRecordAiUsageEvent({
+      action: "project_script_tts",
+      provider: "system_tts",
+      model: input.voice,
+      endpoint: "/usr/bin/say",
+      status: "error",
+      errorMessage: error instanceof Error ? error.message : "TTS 生成失败。",
+      inputCount: 1,
+      projectId: input.projectId,
+      metadata: {
+        itemId: input.item.id,
+        textLength: input.item.content.length,
+      },
     });
   }
 };

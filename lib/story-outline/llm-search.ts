@@ -1,5 +1,7 @@
 import { PersistedAppSettings } from "@/lib/persistence/types";
 import { StoryOutlineSearchResult, StoryOutlineSearchSegment } from "@/lib/story-outline/search";
+import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
+import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
 
 const SEARCH_CANDIDATE_LIMIT = 80;
 const SEARCH_RESULT_LIMIT = 20;
@@ -18,6 +20,11 @@ interface OpenAiChatCompletionResponse {
   }>;
   error?: {
     message?: string;
+  };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
   };
 }
 
@@ -183,6 +190,7 @@ export const rankStorySegmentsWithLlm = async (input: {
   candidates: StoryOutlineSearchSegment[];
   settings: PersistedAppSettings;
   limit?: number;
+  projectId?: string;
 }): Promise<StoryOutlineSearchResult[]> => {
   if (!hasLlmSearchConfig(input.settings)) {
     throw new Error("请先在设置页填写大模型搜索所需的 API 配置。");
@@ -213,13 +221,73 @@ export const rankStorySegmentsWithLlm = async (input: {
   });
 
   const payload = (await response.json()) as OpenAiChatCompletionResponse;
+  const tokenUsage = extractOpenAiTokenUsage(payload);
+  const model =
+    input.settings.aiSearchModelName.trim() ||
+    input.settings.aiModelName ||
+    DEFAULT_SEARCH_MODEL;
 
   if (!response.ok) {
+    safeRecordAiUsageEvent({
+      action: "story_outline_llm_search",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "error",
+      errorMessage: payload.error?.message || "大模型搜索接口调用失败",
+      inputTokens: tokenUsage.inputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      inputCount: candidates.length,
+      projectId: input.projectId,
+      metadata: {
+        queryLength: input.query.length,
+      },
+    });
     throw new Error(payload.error?.message || "大模型搜索接口调用失败");
   }
 
-  const rawContent = getAssistantText(payload);
-  const rawResults = parseSearchResultDrafts(rawContent);
+  try {
+    const rawContent = getAssistantText(payload);
+    const rawResults = parseSearchResultDrafts(rawContent);
+    const results = normalizeSearchResults(rawResults, candidates, limit);
 
-  return normalizeSearchResults(rawResults, candidates, limit);
+    safeRecordAiUsageEvent({
+      action: "story_outline_llm_search",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "success",
+      inputTokens: tokenUsage.inputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      inputCount: candidates.length,
+      projectId: input.projectId,
+      metadata: {
+        queryLength: input.query.length,
+        resultCount: results.length,
+      },
+    });
+
+    return results;
+  } catch (error) {
+    safeRecordAiUsageEvent({
+      action: "story_outline_llm_search",
+      provider: "openai_compatible",
+      model,
+      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      status: "error",
+      errorMessage:
+        error instanceof Error ? error.message : "大模型搜索结果解析失败",
+      inputTokens: tokenUsage.inputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      inputCount: candidates.length,
+      projectId: input.projectId,
+      metadata: {
+        queryLength: input.query.length,
+      },
+    });
+    throw error;
+  }
 };

@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "next dev",
     "generate:icons": "node scripts/generate-icons.mjs",
+    "prepare:python-runtime": "node scripts/prepare-python-runtime.mjs",
     "build": "next build --webpack",
-    "package:app": "npm run generate:icons && npm run build && node scripts/package-app.mjs",
+    "package:app": "npm run prepare:python-runtime && npm run generate:icons && npm run build && node scripts/package-app.mjs",
     "dist:dir": "npm run package:app && ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --dir",
     "dist:mac": "npm run package:app && ELECTRON_BUILDER_CACHE=/tmp/electron-builder-cache ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --mac dmg zip",
     "dist:win": "npm run package:app && ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --win nsis portable",
@@ -26,10 +27,31 @@
     },
     "files": [
       "electron/**/*",
-      "models/**/*",
-      "sqlite-vec/**/*",
       "dist/app/server/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/app/sqlite-vec",
+        "to": "sqlite-vec",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist/app/scripts",
+        "to": "python-scripts",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist/app/python",
+        "to": "python",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "extraMetadata": {
       "main": "electron/main.js"
@@ -78,7 +100,7 @@
     "@radix-ui/react-toggle": "1.1.10",
     "@radix-ui/react-toggle-group": "1.1.11",
     "@radix-ui/react-tooltip": "1.2.8",
-    "@renweilong/electron-ffmpeg-player": "^0.1.2",
+    "@renweilong/electron-ffmpeg-player": "^0.1.4",
     "@vercel/analytics": "1.6.1",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
