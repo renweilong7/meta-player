@@ -363,6 +363,14 @@ export default function VideoEditorPage() {
     setPreviewProjectCompilationSignature(null);
   };
 
+  const captureFrameHoldPreview = () => {
+    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") !== "frame_hold") {
+      return;
+    }
+
+    setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
+  };
+
   /**
    * 首屏统一加载持久化快照。
    *
@@ -909,9 +917,7 @@ export default function VideoEditorPage() {
       return;
     }
 
-    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
-      setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
-    }
+    captureFrameHoldPreview();
 
     setSelectedMediaId(result.assetId);
     setCurrentSceneId(result.sceneId);
@@ -1088,9 +1094,7 @@ export default function VideoEditorPage() {
       return;
     }
 
-    if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
-      setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
-    }
+    captureFrameHoldPreview();
 
     setSelectedMediaId(item.assetId);
     setCurrentSceneId(null);
@@ -1147,9 +1151,7 @@ export default function VideoEditorPage() {
       return;
     }
     if (selectedMedia?.id !== targetAssetId) {
-      if ((currentProject?.crossAssetSwitchMode ?? "frame_hold") === "frame_hold") {
-        setFrameHoldPreviewSrc(playerRef.current?.captureCurrentFrame() ?? null);
-      }
+      captureFrameHoldPreview();
       setSelectedMediaId(targetAssetId);
       setCurrentSceneId(null);
       setIsProjectScriptPlaybackActive(true);

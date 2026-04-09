@@ -82,6 +82,16 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
   const surfaceRef = useRef<HTMLDivElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const preloadVideoRef = useRef<HTMLVideoElement>(null);
+  const preloadTimerRef = useRef<number | null>(null);
+  const lastPreloadRequestRef = useRef<{
+    src: string;
+    startTime: number | null;
+  } | null>(null);
+  const lastFrameCaptureRef = useRef<{
+    src: string;
+    capturedAt: number;
+    dataUrl: string | null;
+  } | null>(null);
   const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
   const [showThumbnailRail, setShowThumbnailRail] = useState(false);
   const normalizedPlaybackRate = normalizePlaybackRate(playbackRate);
@@ -146,26 +156,53 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
       return;
     }
 
-    preloadVideo.src = preloadSrc;
-    preloadVideo.preload = "auto";
-    preloadVideo.load();
+    const normalizedStartTime =
+      typeof preloadStartTime === "number" && Number.isFinite(preloadStartTime)
+        ? Math.max(preloadStartTime, 0)
+        : null;
+    const previousRequest = lastPreloadRequestRef.current;
+    if (
+      previousRequest?.src === preloadSrc &&
+      previousRequest.startTime === normalizedStartTime
+    ) {
+      return;
+    }
+
+    lastPreloadRequestRef.current = {
+      src: preloadSrc,
+      startTime: normalizedStartTime,
+    };
 
     const handleLoadedMetadata = () => {
       if (
-        typeof preloadStartTime === "number" &&
-        Number.isFinite(preloadStartTime) &&
-        preloadStartTime >= 0
+        typeof normalizedStartTime === "number" &&
+        normalizedStartTime >= 0
       ) {
         try {
-          preloadVideo.currentTime = preloadStartTime;
+          preloadVideo.currentTime = normalizedStartTime;
         } catch {
           // 忽略预加载 seek 失败，保留基础 preload 行为。
         }
       }
     };
 
-    preloadVideo.addEventListener("loadedmetadata", handleLoadedMetadata);
+    if (preloadTimerRef.current !== null) {
+      window.clearTimeout(preloadTimerRef.current);
+    }
+
+    preloadTimerRef.current = window.setTimeout(() => {
+      preloadVideo.src = preloadSrc;
+      preloadVideo.preload = "metadata";
+      preloadVideo.load();
+    }, 120);
+
+    preloadVideo.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
     return () => {
+      if (preloadTimerRef.current !== null) {
+        window.clearTimeout(preloadTimerRef.current);
+        preloadTimerRef.current = null;
+      }
+
       preloadVideo.removeEventListener("loadedmetadata", handleLoadedMetadata);
     };
   }, [crossAssetSwitchMode, preloadSrc, preloadStartTime]);
@@ -216,19 +253,40 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(funct
           return null;
         }
 
+        const currentSrc = videoElement.currentSrc || src || "";
+        const previousCapture = lastFrameCaptureRef.current;
+        if (
+          previousCapture &&
+          previousCapture.src === currentSrc &&
+          performance.now() - previousCapture.capturedAt < 160
+        ) {
+          return previousCapture.dataUrl;
+        }
+
         const canvas = document.createElement("canvas");
-        canvas.width = videoElement.videoWidth;
-        canvas.height = videoElement.videoHeight;
+        const maxSnapshotEdge = 960;
+        const scale = Math.min(
+          1,
+          maxSnapshotEdge / Math.max(videoElement.videoWidth, videoElement.videoHeight)
+        );
+        canvas.width = Math.max(Math.round(videoElement.videoWidth * scale), 1);
+        canvas.height = Math.max(Math.round(videoElement.videoHeight * scale), 1);
         const context = canvas.getContext("2d");
         if (!context) {
           return null;
         }
 
         context.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL("image/png");
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+        lastFrameCaptureRef.current = {
+          src: currentSrc,
+          capturedAt: performance.now(),
+          dataUrl,
+        };
+        return dataUrl;
       },
     }),
-    []
+    [src]
   );
 
   return (

@@ -1,6 +1,11 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
-const { existsSync, mkdirSync, writeFileSync } = require("node:fs");
+const {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+} = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
@@ -9,6 +14,43 @@ const PRODUCTION_PORT = process.env.PORT || "3232";
 const PRODUCTION_HOST = "127.0.0.1";
 
 let nextServerProcess = null;
+
+const getStartupLogPath = () =>
+  path.join(app.getPath("userData"), "startup.log");
+
+const writeStartupLog = (message) => {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] ${message}\n`;
+
+  try {
+    mkdirSync(app.getPath("userData"), { recursive: true });
+    appendFileSync(getStartupLogPath(), line);
+  } catch (error) {
+    console.error("Failed to write startup log:", error);
+  }
+};
+
+const formatError = (error) => {
+  if (error instanceof Error) {
+    return error.stack || error.message;
+  }
+
+  return String(error);
+};
+
+const reportStartupError = (title, error) => {
+  const detail = formatError(error);
+  writeStartupLog(`${title}: ${detail}`);
+
+  if (!app.isReady()) {
+    return;
+  }
+
+  dialog.showErrorBox(
+    title,
+    `${detail}\n\n启动日志位置：${getStartupLogPath()}`
+  );
+};
 
 const resolveProductionServerPath = () => {
   const appPath = app.getAppPath();
@@ -22,6 +64,7 @@ const resolveProductionServerPath = () => {
     throw new Error(`Unable to locate production server bundle from ${appPath}`);
   }
 
+  writeStartupLog(`Resolved production server path: ${resolved}`);
   return resolved;
 };
 
@@ -54,6 +97,7 @@ const startProductionServer = async () => {
   }
 
   const serverPath = resolveProductionServerPath();
+  writeStartupLog(`Starting production server from ${serverPath}`);
   nextServerProcess = spawn(process.execPath, [serverPath], {
     cwd: path.dirname(serverPath),
     env: {
@@ -64,15 +108,33 @@ const startProductionServer = async () => {
       META_PLAYER_DATA_DIR: path.join(app.getPath("userData"), ".meta-player"),
       ELECTRON_RUN_AS_NODE: "1",
     },
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
   });
 
-  nextServerProcess.on("exit", () => {
+  nextServerProcess.stdout?.on("data", (chunk) => {
+    writeStartupLog(`[server stdout] ${chunk.toString().trimEnd()}`);
+  });
+
+  nextServerProcess.stderr?.on("data", (chunk) => {
+    writeStartupLog(`[server stderr] ${chunk.toString().trimEnd()}`);
+  });
+
+  nextServerProcess.on("error", (error) => {
+    reportStartupError("Failed to start production server", error);
+  });
+
+  nextServerProcess.on("exit", (code, signal) => {
+    writeStartupLog(
+      `Production server exited with code=${code ?? "null"} signal=${signal ?? "null"}`
+    );
     nextServerProcess = null;
   });
 
   const url = `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
+  writeStartupLog(`Waiting for production server at ${url}`);
   await waitForServer(url);
+  writeStartupLog(`Production server is ready at ${url}`);
   return url;
 };
 
@@ -100,6 +162,7 @@ const applyProductionWindowHardening = (mainWindow) => {
 };
 
 const createWindow = async () => {
+  writeStartupLog(`Creating window. isDev=${String(isDev)}`);
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -119,7 +182,9 @@ const createWindow = async () => {
     ? "http://localhost:3000"
     : await startProductionServer();
 
+  writeStartupLog(`Loading window URL: ${url}`);
   await mainWindow.loadURL(url);
+  writeStartupLog(`Window URL loaded: ${url}`);
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
@@ -127,6 +192,7 @@ const createWindow = async () => {
 };
 
 app.whenReady().then(() => {
+  writeStartupLog("App is ready.");
   if (!isDev) {
     Menu.setApplicationMenu(null);
   }
@@ -183,13 +249,44 @@ app.whenReady().then(() => {
     return targetPath;
   });
 
-  void createWindow();
+  void createWindow().catch((error) => {
+    reportStartupError("Failed to create main window", error);
+    app.quit();
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       void createWindow();
     }
   });
+});
+
+app.on("render-process-gone", (_event, webContents, details) => {
+  writeStartupLog(
+    `Renderer process gone. reason=${details.reason} exitCode=${details.exitCode}`
+  );
+});
+
+app.on("child-process-gone", (_event, details) => {
+  writeStartupLog(
+    `Child process gone. type=${details.type} reason=${details.reason} name=${details.name ?? ""} serviceName=${details.serviceName ?? ""}`
+  );
+});
+
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("did-fail-load", (_loadEvent, errorCode, errorDescription, validatedURL) => {
+    writeStartupLog(
+      `Web contents failed to load. code=${errorCode} description=${errorDescription} url=${validatedURL}`
+    );
+  });
+});
+
+process.on("uncaughtException", (error) => {
+  reportStartupError("Uncaught exception", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  reportStartupError("Unhandled rejection", reason);
 });
 
 app.on("before-quit", () => {

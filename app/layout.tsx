@@ -4,8 +4,8 @@ import '@renweilong/electron-ffmpeg-player/style.css'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: '视频播放器 - 专业视频管理工具',
-  description: '专业的视频播放器桌面客户端，支持素材管理和剧情大纲',
+  title: 'MetaPlayer',
+  description: 'MetaPlayer 桌面客户端，支持素材管理和剧情大纲',
   generator: 'v0.app',
   icons: {
     icon: [
