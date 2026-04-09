@@ -61,6 +61,7 @@ ${JSON.stringify(
     assetTitle: candidate.assetTitle,
     sceneTitle: candidate.sceneTitle,
     sceneDescription: candidate.sceneDescription,
+    shotAnalysis: candidate.shotAnalysisText || candidate.searchableText || undefined,
     timestamp: candidate.timestamp,
   })),
   null,

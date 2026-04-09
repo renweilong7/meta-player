@@ -27,6 +27,15 @@ import {
 import { StoryScene } from "@/lib/story-outline/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
+export interface StoryOutlineSearchDisplayItem {
+  id: string;
+  assetId: string;
+  assetTitle: string;
+  score: number;
+  scene: StoryScene;
+  result: StoryOutlineSearchResult;
+}
+
 interface StoryOutlineProps {
   scenes: StoryScene[];
   currentSceneId: string | null;
@@ -43,13 +52,14 @@ interface StoryOutlineProps {
   searchQuery?: string;
   searchState?: "idle" | "loading" | "embedding" | "keyword" | "llm";
   searchResults?: StoryOutlineSearchResult[];
+  searchDisplayItems?: StoryOutlineSearchDisplayItem[];
   currentSearchResultId?: string | null;
   onSearchResultSelect?: (result: StoryOutlineSearchResult) => void;
   onSearchQueryChange?: (value: string) => void;
   onSearchSubmit?: () => void | Promise<void>;
   onClearSearch?: () => void;
-  onGenerateShotAnalysis?: (sceneId: string) => void | Promise<void>;
-  onSceneSubtitleSelect?: (sceneId: string, time: number) => void;
+  onGenerateShotAnalysis?: (sceneId: string, mediaId?: string) => void | Promise<void>;
+  onSceneSubtitleSelect?: (sceneId: string, time: number, mediaId?: string) => void;
 }
 
 export function StoryOutline({
@@ -64,6 +74,7 @@ export function StoryOutline({
   searchQuery = "",
   searchState = "idle",
   searchResults = [],
+  searchDisplayItems = [],
   currentSearchResultId = null,
   onSearchResultSelect,
   onSearchQueryChange,
@@ -76,6 +87,24 @@ export function StoryOutline({
   const [expandedSubtitleSceneId, setExpandedSubtitleSceneId] = useState<string | null>(null);
   const sceneRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const isSearchMode = searchQuery.trim().length > 0 || searchState === "loading";
+  const displayedSearchItems =
+    searchDisplayItems.length > 0
+      ? searchDisplayItems
+      : searchResults.map((result) => ({
+          id: result.id,
+          assetId: result.assetId,
+          assetTitle: result.assetTitle,
+          score: result.score,
+          result,
+          scene: {
+            id: result.sceneId,
+            title: result.sceneTitle,
+            description: result.sceneDescription,
+            duration: "",
+            timestamp: result.timestamp,
+            seekTime: result.startSeconds,
+          },
+        }));
   const searchStatusLabel =
     searchState === "embedding"
       ? "语义检索"
@@ -121,15 +150,291 @@ export function StoryOutline({
   };
 
   useEffect(() => {
-    if (!currentSceneId) {
+    const activeId = isSearchMode ? currentSearchResultId : currentSceneId;
+    if (!activeId) {
       return;
     }
 
-    sceneRefs.current[currentSceneId]?.scrollIntoView({
+    sceneRefs.current[activeId]?.scrollIntoView({
       behavior: "smooth",
       block: "center",
     });
-  }, [currentSceneId]);
+  }, [currentSceneId, currentSearchResultId, isSearchMode]);
+
+  const renderSceneCard = (input: {
+    keyId: string;
+    scene: StoryScene;
+    index: number;
+    isActive: boolean;
+    assetId?: string;
+    assetTitle?: string;
+    score?: number;
+    result?: StoryOutlineSearchResult;
+  }) => {
+    const { keyId, scene, index, isActive, assetId, assetTitle, score, result } = input;
+    const isExpanded = expandedSceneId === keyId;
+    const isSubtitleExpanded = expandedSubtitleSceneId === keyId;
+
+    return (
+      <div
+        key={keyId}
+        ref={(element) => {
+          sceneRefs.current[keyId] = element;
+        }}
+        role="button"
+        tabIndex={0}
+        onClick={() => {
+          if (result) {
+            onSearchResultSelect?.(result);
+            return;
+          }
+
+          onSceneSelect(scene.id);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+
+          event.preventDefault();
+
+          if (result) {
+            onSearchResultSelect?.(result);
+            return;
+          }
+
+          onSceneSelect(scene.id);
+        }}
+        className={cn(
+          "group relative mb-2 flex w-full flex-col rounded-lg p-3 text-left transition-colors",
+          isActive ? "bg-secondary" : "hover:bg-secondary/50"
+        )}
+      >
+        <div className="absolute left-1 top-1/2 -translate-y-1/2 opacity-0 transition-opacity group-hover:opacity-100">
+          <GripVertical className="h-4 w-4 text-muted-foreground" />
+        </div>
+
+        <div className="pl-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
+              <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                {index + 1}
+              </span>
+              <span className="truncate text-sm font-medium text-card-foreground">
+                {scene.title}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {typeof score === "number" ? (
+                <Badge variant="secondary" className="shrink-0">
+                  {searchState === "embedding" || searchState === "llm"
+                    ? score.toFixed(3)
+                    : score}
+                </Badge>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-card-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setExpandedSceneId((current) => (current === keyId ? null : keyId));
+                }}
+              >
+                {isExpanded ? "收起" : "展开"}
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4" />
+                ) : (
+                  <ChevronRight className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {assetTitle ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">素材：{assetTitle}</p>
+          ) : null}
+
+          <div
+            className={cn(
+              "mt-2 overflow-hidden rounded-md",
+              isExpanded ? "max-h-48 overflow-y-auto" : ""
+            )}
+          >
+            <p
+              className={cn(
+                "text-xs leading-5 text-muted-foreground",
+                isExpanded ? "" : "line-clamp-3"
+              )}
+            >
+              {scene.description}
+            </p>
+          </div>
+
+          <div className="mt-2 flex items-center justify-between">
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span>{scene.timestamp}</span>
+              {scene.duration ? (
+                <>
+                  <span className="text-muted-foreground/50">|</span>
+                  <span>{scene.duration}</span>
+                </>
+              ) : null}
+            </div>
+            <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-card-foreground"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Edit2 className="h-3 w-3" />
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              disabled={scene.shotAnalysis?.status === "loading"}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (scene.shotAnalysis?.status === "success") {
+                  setExpandedSceneId((current) => (current === keyId ? null : keyId));
+                  return;
+                }
+
+                void onGenerateShotAnalysis?.(scene.id, assetId);
+                setExpandedSceneId(keyId);
+              }}
+            >
+              {scene.shotAnalysis?.status === "loading" ? (
+                <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Clapperboard className="mr-1 h-3.5 w-3.5" />
+              )}
+              {getShotAnalysisButtonLabel(scene)}
+            </Button>
+            {scene.shotAnalysis?.updatedAt ? (
+              <span className="text-[11px] text-muted-foreground">已更新</span>
+            ) : null}
+          </div>
+
+          {scene.subtitleEntries?.length ? (
+            <div className="mt-3 rounded-lg border border-border/70 bg-background/70">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between px-3 py-2 text-left"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setExpandedSubtitleSceneId((current) =>
+                    current === keyId ? null : keyId
+                  );
+                  setExpandedSceneId(keyId);
+                }}
+              >
+                <span className="text-xs font-medium text-foreground">
+                  切片字幕 · {scene.subtitleEntries.length} 条
+                </span>
+                {isSubtitleExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+
+              {isSubtitleExpanded ? (
+                <div className="border-t border-border/70 px-2 py-2">
+                  <div className="max-h-52 space-y-1 overflow-y-auto">
+                    {scene.subtitleEntries.map((entry) => (
+                      <button
+                        key={entry.id}
+                        type="button"
+                        className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-secondary/60"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSceneSubtitleSelect?.(scene.id, entry.startSeconds, assetId);
+                        }}
+                      >
+                        <p className="text-[11px] text-muted-foreground">{entry.timeline}</p>
+                        <p className="mt-1 text-xs leading-5 text-foreground">{entry.content}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {scene.shotAnalysis &&
+          (isExpanded || scene.shotAnalysis.status !== "success") ? (
+            <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-foreground">
+                <Clapperboard className="h-3.5 w-3.5" />
+                镜头解读
+              </div>
+
+              {scene.shotAnalysis.status === "loading" ? (
+                <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                  <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
+                  正在抽样画面并生成结构化解读
+                </div>
+              ) : null}
+
+              {scene.shotAnalysis.status === "error" ? (
+                <p className="mt-2 text-xs leading-5 text-destructive">
+                  {scene.shotAnalysis.error || "镜头解读生成失败。"}
+                </p>
+              ) : null}
+
+              {scene.shotAnalysis.summary ? (
+                <p className="mt-2 text-xs leading-5 text-foreground">
+                  {scene.shotAnalysis.summary}
+                </p>
+              ) : null}
+
+              {scene.shotAnalysis.status === "success" ? (
+                <div className="mt-3 space-y-3 text-xs leading-5 text-muted-foreground">
+                  <div className="space-y-2">
+                    <p><span className="font-medium text-foreground">人物动作：</span>{scene.shotAnalysis.action}</p>
+                    <p><span className="font-medium text-foreground">表情与眼神：</span>{scene.shotAnalysis.expressionAndGaze}</p>
+                    <p><span className="font-medium text-foreground">镜头语言：</span>{scene.shotAnalysis.cinematography}</p>
+                    <p><span className="font-medium text-foreground">画面氛围：</span>{scene.shotAnalysis.atmosphere}</p>
+                    <p><span className="font-medium text-foreground">解说价值点：</span>{scene.shotAnalysis.commentaryHooks}</p>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-[11px]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onGenerateShotAnalysis?.(scene.id, assetId);
+                        setExpandedSceneId(keyId);
+                      }}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      重新解读
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        {isActive ? (
+          <div className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 w-full flex-col bg-card">
@@ -137,7 +442,9 @@ export function StoryOutline({
       <div className="border-b border-border p-4">
         <h2 className="text-sm font-semibold text-card-foreground">剧情大纲</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          {isSearchMode ? `共 ${searchResults.length} 条搜索结果` : `共 ${scenes.length} 个场景`}
+          {isSearchMode
+            ? `共 ${displayedSearchItems.length} 条搜索结果`
+            : `共 ${scenes.length} 个场景`}
         </p>
         <div className="mt-3 flex items-center gap-2">
           <div className="relative min-w-0 flex-1">
@@ -225,41 +532,18 @@ export function StoryOutline({
                   </p>
                 </div>
               ) : (
-                searchResults.map((result) => {
-                  return (
-                    <button
-                      key={result.id}
-                      type="button"
-                      onClick={() => onSearchResultSelect?.(result)}
-                      className={cn(
-                        "mb-2 w-full rounded-lg border p-3 text-left transition-colors",
-                        currentSearchResultId === result.id
-                          ? "border-primary/40 bg-secondary"
-                          : "border-border bg-background hover:bg-secondary/50"
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-card-foreground">
-                            {result.sceneTitle}
-                          </p>
-                          <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
-                            {result.sceneDescription}
-                          </p>
-                        </div>
-                        <Badge variant="secondary" className="shrink-0">
-                          {searchState === "embedding" || searchState === "llm"
-                            ? result.score.toFixed(3)
-                            : result.score}
-                        </Badge>
-                      </div>
-                      <div className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                        <span className="truncate">{result.assetTitle}</span>
-                        <span className="shrink-0">{result.timestamp}</span>
-                      </div>
-                    </button>
-                  );
-                })
+                displayedSearchItems.map((item, index) =>
+                  renderSceneCard({
+                    keyId: item.id,
+                    scene: item.scene,
+                    index,
+                    isActive: currentSearchResultId === item.id,
+                    assetId: item.assetId,
+                    assetTitle: item.assetTitle,
+                    score: item.score,
+                    result: item.result,
+                  })
+                )
               )}
             </>
           ) : (
@@ -297,237 +581,14 @@ export function StoryOutline({
             </div>
           )}
 
-          {scenes.map((scene, index) => (
-            <div
-              key={scene.id}
-              ref={(element) => {
-                sceneRefs.current[scene.id] = element;
-              }}
-              role="button"
-              tabIndex={0}
-              onClick={() => onSceneSelect(scene.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onSceneSelect(scene.id);
-                }
-              }}
-              className={cn(
-                "group relative mb-2 flex w-full flex-col rounded-lg p-3 text-left transition-colors",
-                currentSceneId === scene.id
-                  ? "bg-secondary"
-                  : "hover:bg-secondary/50"
-              )}
-            >
-              {/* Drag Handle */}
-              <div className="absolute left-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
-              </div>
-
-              <div className="pl-4">
-                {/* Scene Header */}
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                    <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
-                      {index + 1}
-                    </span>
-                    <span className="truncate text-sm font-medium text-card-foreground">
-                      {scene.title}
-                    </span>
-                  </div>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs text-muted-foreground hover:text-card-foreground"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleToggleExpanded(scene.id);
-                    }}
-                  >
-                    {expandedSceneId === scene.id ? "收起" : "展开"}
-                    {expandedSceneId === scene.id ? (
-                      <ChevronDown className="h-4 w-4" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-
-                {/* Description */}
-                <div
-                  className={cn(
-                    "mt-2 overflow-hidden rounded-md",
-                    expandedSceneId === scene.id ? "max-h-48 overflow-y-auto" : ""
-                  )}
-                >
-                  <p
-                    className={cn(
-                      "text-xs leading-5 text-muted-foreground",
-                      expandedSceneId === scene.id ? "" : "line-clamp-3"
-                    )}
-                  >
-                    {scene.description}
-                  </p>
-                </div>
-
-                {/* Footer */}
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                    <span>{scene.timestamp}</span>
-                    <span className="text-muted-foreground/50">|</span>
-                    <span>{scene.duration}</span>
-                  </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-muted-foreground hover:text-card-foreground"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <Edit2 className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs"
-                    disabled={scene.shotAnalysis?.status === "loading"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleShotAnalysisAction(scene);
-                    }}
-                  >
-                    {scene.shotAnalysis?.status === "loading" ? (
-                      <LoaderCircle className="mr-1 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Clapperboard className="mr-1 h-3.5 w-3.5" />
-                    )}
-                    {getShotAnalysisButtonLabel(scene)}
-                  </Button>
-                  {scene.shotAnalysis?.updatedAt ? (
-                    <span className="text-[11px] text-muted-foreground">
-                      已更新
-                    </span>
-                  ) : null}
-                </div>
-
-                {scene.subtitleEntries?.length ? (
-                  <div className="mt-3 rounded-lg border border-border/70 bg-background/70">
-                    <button
-                      type="button"
-                      className="flex w-full items-center justify-between px-3 py-2 text-left"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleSubtitleToggle(scene.id);
-                      }}
-                    >
-                      <span className="text-xs font-medium text-foreground">
-                        切片字幕 · {scene.subtitleEntries.length} 条
-                      </span>
-                      {expandedSubtitleSceneId === scene.id ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </button>
-
-                    {expandedSubtitleSceneId === scene.id ? (
-                      <div className="border-t border-border/70 px-2 py-2">
-                        <div className="max-h-52 space-y-1 overflow-y-auto">
-                          {scene.subtitleEntries.map((entry) => (
-                            <button
-                              key={entry.id}
-                              type="button"
-                              className="w-full rounded-md px-2 py-2 text-left transition-colors hover:bg-secondary/60"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                onSceneSubtitleSelect?.(scene.id, entry.startSeconds);
-                              }}
-                            >
-                              <p className="text-[11px] text-muted-foreground">
-                                {entry.timeline}
-                              </p>
-                              <p className="mt-1 text-xs leading-5 text-foreground">
-                                {entry.content}
-                              </p>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {scene.shotAnalysis &&
-                (expandedSceneId === scene.id || scene.shotAnalysis.status !== "success") ? (
-                  <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3">
-                    <div className="flex items-center gap-2 text-xs font-medium text-foreground">
-                      <Clapperboard className="h-3.5 w-3.5" />
-                      镜头解读
-                    </div>
-
-                    {scene.shotAnalysis.status === "loading" ? (
-                      <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                        <LoaderCircle className="h-3.5 w-3.5 animate-spin text-primary" />
-                        正在抽样画面并生成结构化解读
-                      </div>
-                    ) : null}
-
-                    {scene.shotAnalysis.status === "error" ? (
-                      <p className="mt-2 text-xs leading-5 text-destructive">
-                        {scene.shotAnalysis.error || "镜头解读生成失败。"}
-                      </p>
-                    ) : null}
-
-                    {scene.shotAnalysis.summary ? (
-                      <p className="mt-2 text-xs leading-5 text-foreground">
-                        {scene.shotAnalysis.summary}
-                      </p>
-                    ) : null}
-
-                    {scene.shotAnalysis.status === "success" ? (
-                      <div className="mt-3 space-y-3 text-xs leading-5 text-muted-foreground">
-                        <div className="space-y-2">
-                          <p><span className="font-medium text-foreground">人物动作：</span>{scene.shotAnalysis.action}</p>
-                          <p><span className="font-medium text-foreground">表情与眼神：</span>{scene.shotAnalysis.expressionAndGaze}</p>
-                          <p><span className="font-medium text-foreground">镜头语言：</span>{scene.shotAnalysis.cinematography}</p>
-                          <p><span className="font-medium text-foreground">画面氛围：</span>{scene.shotAnalysis.atmosphere}</p>
-                          <p><span className="font-medium text-foreground">解说价值点：</span>{scene.shotAnalysis.commentaryHooks}</p>
-                        </div>
-                        <div className="flex justify-end">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            className="h-7 text-[11px]"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void onGenerateShotAnalysis?.(scene.id);
-                              setExpandedSceneId(scene.id);
-                            }}
-                          >
-                            <Sparkles className="h-3.5 w-3.5" />
-                            重新解读
-                          </Button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Current Scene Indicator */}
-              {currentSceneId === scene.id && (
-                <div className="absolute left-0 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-primary" />
-              )}
-            </div>
-          ))}
+          {scenes.map((scene, index) =>
+            renderSceneCard({
+              keyId: scene.id,
+              scene,
+              index,
+              isActive: currentSceneId === scene.id,
+            })
+          )}
             </>
           )}
         </div>

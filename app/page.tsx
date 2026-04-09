@@ -12,7 +12,10 @@ import {
 import { UserPanel } from "@/components/user-panel";
 import { UnauthorizedHome } from "@/components/unauthorized-home";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
-import { StoryOutline } from "@/components/story-outline";
+import {
+  StoryOutline,
+  StoryOutlineSearchDisplayItem,
+} from "@/components/story-outline";
 import { UsagePanel } from "@/components/usage-panel";
 import {
   ResizableHandle,
@@ -290,6 +293,51 @@ export default function VideoEditorPage() {
       })),
     }));
   }, [selectedMedia?.storyOutline, selectedMedia?.srtContent]);
+  const outlineSearchDisplayItems: StoryOutlineSearchDisplayItem[] = useMemo(
+    () =>
+      outlineSearchResults.map((result) => {
+        const targetMedia = visibleMediaItems.find((item) => item.id === result.assetId);
+        const targetSceneRecord = targetMedia?.storyOutline?.find(
+          (scene) => scene.id === result.sceneId
+        );
+        const mappedScene = targetSceneRecord
+          ? mapStoryOutlineToScenes([targetSceneRecord])[0]
+          : {
+              id: result.sceneId,
+              title: result.sceneTitle,
+              description: result.sceneDescription,
+              duration: formatDurationLabel(result.endSeconds - result.startSeconds),
+              timestamp: result.timestamp,
+              seekTime: result.startSeconds,
+            };
+        const rawSrtContent = targetMedia?.srtContent?.trim();
+        const subtitleEntries = rawSrtContent
+          ? extractSubtitleBlocksInRange(rawSrtContent, {
+              startSeconds: result.startSeconds,
+              endSeconds: result.endSeconds,
+            }).map((block) => ({
+              id: block.id,
+              startSeconds: block.startSeconds,
+              endSeconds: block.endSeconds,
+              timeline: block.timeline,
+              content: block.content,
+            }))
+          : undefined;
+
+        return {
+          id: result.id,
+          assetId: result.assetId,
+          assetTitle: result.assetTitle,
+          score: result.score,
+          result,
+          scene: {
+            ...mappedScene,
+            subtitleEntries,
+          },
+        };
+      }),
+    [outlineSearchResults, visibleMediaItems]
+  );
   const outlineMediaOptions = useMemo(
     () =>
       visibleMediaItems
@@ -899,10 +947,28 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleSceneSubtitleSelect = (sceneId: string, time: number) => {
+  const handleSceneSubtitleSelect = (
+    sceneId: string,
+    time: number,
+    mediaId?: string
+  ) => {
+    const targetMediaId = mediaId ?? selectedMediaId;
+    if (!targetMediaId) {
+      return;
+    }
+
     setCurrentSceneId(sceneId);
     clearProjectPreviewPlayback();
-    playerRef.current?.seekTo(time);
+
+    if (selectedMedia?.id === targetMediaId) {
+      playerRef.current?.seekTo(time);
+      return;
+    }
+
+    captureFrameHoldPreview();
+    setPlayerPendingStartTime(time);
+    setPendingOutlineSearchResult(null);
+    setSelectedMediaId(targetMediaId);
   };
 
   const handleSelectOutlineSearchResult = (result: StoryOutlineSearchResult) => {
@@ -1758,18 +1824,27 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleGenerateSceneShotAnalysis = async (sceneId: string) => {
-    if (!selectedMediaId) {
+  const handleGenerateSceneShotAnalysis = async (
+    sceneId: string,
+    mediaId?: string
+  ) => {
+    const targetMediaId = mediaId ?? selectedMediaId;
+    if (!targetMediaId) {
       return;
     }
 
-    const targetMedia = mediaItems.find((item) => item.id === selectedMediaId);
+    if (selectedMediaId !== targetMediaId) {
+      setSelectedMediaId(targetMediaId);
+      setCurrentSceneId(sceneId);
+    }
+
+    const targetMedia = mediaItems.find((item) => item.id === targetMediaId);
     const targetScene = targetMedia?.storyOutline?.find((scene) => scene.id === sceneId);
     if (!targetMedia || !targetScene) {
       return;
     }
 
-    const loadingOutline = updateSceneShotAnalysisInOutline(selectedMediaId, sceneId, {
+    const loadingOutline = updateSceneShotAnalysisInOutline(targetMediaId, sceneId, {
       status: "loading",
       error: null,
       summary: targetScene.shotAnalysis?.summary,
@@ -1782,18 +1857,18 @@ export default function VideoEditorPage() {
     });
 
     if (loadingOutline) {
-      applyLocalMediaPatch(selectedMediaId, {
+      applyLocalMediaPatch(targetMediaId, {
         storyOutline: loadingOutline,
       });
     }
 
     try {
-      const updatedMaterial = await generateMaterialSceneShotAnalysis(selectedMediaId, sceneId);
+      const updatedMaterial = await generateMaterialSceneShotAnalysis(targetMediaId, sceneId);
       replaceMaterialInState(updatedMaterial);
       void refreshUsageSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : "镜头解读生成失败。";
-      const errorOutline = updateSceneShotAnalysisInOutline(selectedMediaId, sceneId, {
+      const errorOutline = updateSceneShotAnalysisInOutline(targetMediaId, sceneId, {
         status: "error",
         error: message,
         summary: targetScene.shotAnalysis?.summary,
@@ -1806,10 +1881,10 @@ export default function VideoEditorPage() {
       });
 
       if (errorOutline) {
-        applyLocalMediaPatch(selectedMediaId, {
+        applyLocalMediaPatch(targetMediaId, {
           storyOutline: errorOutline,
         });
-        await handleUpdateMediaItem(selectedMediaId, {
+        await handleUpdateMediaItem(targetMediaId, {
           storyOutline: errorOutline,
         });
       }
@@ -2168,6 +2243,7 @@ export default function VideoEditorPage() {
                   searchQuery={outlineSearchQuery}
                   searchState={outlineSearchState}
                   searchResults={outlineSearchResults}
+                  searchDisplayItems={outlineSearchDisplayItems}
                   currentSearchResultId={currentOutlineSearchResultId}
                   onSearchQueryChange={setOutlineSearchQuery}
                   onSearchSubmit={handleSearchOutline}
@@ -2189,6 +2265,14 @@ const parseTimecodeToSeconds = (timecode: string): number => {
   const [hours, minutes, seconds] = timecode.split(":").map(Number);
 
   return hours * 3600 + minutes * 60 + seconds;
+};
+
+const formatDurationLabel = (durationSeconds: number) => {
+  const totalSeconds = Math.max(0, Math.floor(durationSeconds));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 };
 
 const parseTimeRangeDuration = (timestamp: string) => {

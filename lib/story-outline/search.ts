@@ -17,6 +17,7 @@ export interface StoryOutlineSearchSegment {
   startSeconds: number;
   endSeconds: number;
   timestamp: string;
+  shotAnalysisText?: string;
   searchableText: string;
   embedding?: number[];
   embeddingModel?: string | null;
@@ -52,6 +53,7 @@ export const buildStoryOutlineSearchSegments = (
       startSeconds: scene.startSeconds,
       endSeconds: scene.endSeconds,
       timestamp: `${scene.startTimecode} - ${scene.endTimecode}`,
+      shotAnalysisText: buildShotAnalysisSearchText(scene),
       searchableText: normalizeSearchText(
         [
           material.title,

@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getMaterialById, getSettings, updateMaterial } from "@/lib/persistence/repository";
 import { generateSceneShotAnalysis } from "@/lib/story-outline/shot-analysis";
-import { indexMaterialOutlineById, reindexMaterialOutlineForAttachedProjects } from "@/lib/story-outline/index";
+import {
+  indexMaterialOutlineSceneById,
+  reindexMaterialOutlineSceneForAttachedProjects,
+} from "@/lib/story-outline/index";
 
 export const runtime = "nodejs";
 
@@ -53,8 +56,8 @@ export async function POST(
       return NextResponse.json({ message: "素材更新失败。" }, { status: 404 });
     }
 
-    await indexMaterialOutlineById(id, settings);
-    await reindexMaterialOutlineForAttachedProjects(id, settings);
+    await indexMaterialOutlineSceneById(id, sceneId, settings);
+    await reindexMaterialOutlineSceneForAttachedProjects(id, sceneId, settings);
 
     return NextResponse.json(updated);
   } catch (error) {

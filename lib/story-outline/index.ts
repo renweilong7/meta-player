@@ -12,7 +12,9 @@ import {
   listMaterialsByProjectId,
   listProjectIdsByAssetId,
   listOutlineSegmentsByProjectId,
+  replaceOutlineSegmentForAsset,
   replaceOutlineSegmentsForAsset,
+  replaceProjectOutlineVectorsForSegment,
   replaceProjectOutlineVectorsForAsset,
   searchOutlineSegmentsByVector,
 } from "@/lib/persistence/repository";
@@ -68,6 +70,12 @@ const buildSegmentsForMaterial = (material: PersistedMaterial) =>
     },
   ]);
 
+const buildSegmentForMaterialScene = (
+  material: PersistedMaterial,
+  sceneId: string
+) =>
+  buildSegmentsForMaterial(material).find((segment) => segment.sceneId === sceneId) ?? null;
+
 const buildProjectScopedSettings = (
   settings: PersistedAppSettings,
   project: PersistedProject
@@ -98,6 +106,26 @@ const ensureOutlineSegmentsForMaterial = (material: PersistedMaterial) => {
   );
 
   return baseSegments;
+};
+
+const ensureOutlineSegmentForMaterialScene = (
+  material: PersistedMaterial,
+  sceneId: string
+) => {
+  const segment = buildSegmentForMaterialScene(material, sceneId);
+
+  if (!segment) {
+    return null;
+  }
+
+  replaceOutlineSegmentForAsset(material.id, {
+    ...segment,
+    embeddingStatus: "idle" as const,
+    embeddingModel: null,
+    embeddingError: null,
+  });
+
+  return segment;
 };
 
 const indexProjectMaterialOutline = async (
@@ -178,6 +206,78 @@ const indexProjectMaterialOutline = async (
   return { indexedCount: baseSegments.length, mode: "embedding" as const };
 };
 
+const indexProjectMaterialOutlineScene = async (
+  material: PersistedMaterial,
+  sceneId: string,
+  project: PersistedProject,
+  settings: PersistedAppSettings
+) => {
+  const baseSegment = ensureOutlineSegmentForMaterialScene(material, sceneId);
+
+  if (!baseSegment) {
+    return { indexedCount: 0, mode: "empty" as const };
+  }
+
+  if (project.storySearchProvider === "llm") {
+    return { indexedCount: 1, mode: "keyword_only" as const };
+  }
+
+  if (project.storySearchProvider === "local_embedding") {
+    if (!canUseLocalEmbeddingModel(settings, project.embeddingModelId)) {
+      throw new Error("当前项目选择的本地 Embedding 模型不可用，请检查模型目录是否包含权重文件。");
+    }
+
+    const scopedSettings = buildProjectScopedSettings(settings, project);
+    const localModel = resolveLocalEmbeddingModel(scopedSettings);
+    const [embedding] = await generateLocalEmbeddings(
+      [baseSegment.searchableText],
+      scopedSettings,
+      {
+        action: "story_outline_embedding_index",
+        projectId: project.id,
+        materialId: material.id,
+      }
+    );
+
+    replaceProjectOutlineVectorsForSegment({
+      projectId: project.id,
+      assetId: material.id,
+      segmentId: baseSegment.id,
+      embeddingModel: localModel.id,
+      startSeconds: baseSegment.startSeconds,
+      embedding,
+    });
+    lockProjectEmbeddingConfig(project.id);
+
+    return { indexedCount: 1, mode: "embedding" as const };
+  }
+
+  if (!hasRemoteEmbeddingConfig(settings)) {
+    return { indexedCount: 1, mode: "keyword_only" as const };
+  }
+
+  const [embedding] = await generateEmbeddings([baseSegment.searchableText], {
+    baseUrl: settings.aiApiBaseUrl,
+    apiKey: settings.aiApiKey,
+    model: project.embeddingModelId,
+    action: "story_outline_embedding_index",
+    projectId: project.id,
+    materialId: material.id,
+  });
+
+  replaceProjectOutlineVectorsForSegment({
+    projectId: project.id,
+    assetId: material.id,
+    segmentId: baseSegment.id,
+    embeddingModel: project.embeddingModelId,
+    startSeconds: baseSegment.startSeconds,
+    embedding,
+  });
+  lockProjectEmbeddingConfig(project.id);
+
+  return { indexedCount: 1, mode: "embedding" as const };
+};
+
 export const indexMaterialOutline = async (
   material: PersistedMaterial,
   _settings: PersistedAppSettings
@@ -223,6 +323,53 @@ export const reindexMaterialOutlineForAttachedProjects = async (
       }
 
       return indexProjectMaterialOutline(material, project, settings);
+    })
+  );
+
+  return results.filter((result) => result !== null);
+};
+
+export const indexMaterialOutlineSceneById = async (
+  materialId: string,
+  sceneId: string,
+  settings: PersistedAppSettings
+) => {
+  const material = getMaterialById(materialId);
+  if (!material) {
+    throw new Error("素材不存在。");
+  }
+
+  const segment = ensureOutlineSegmentForMaterialScene(material, sceneId);
+
+  return {
+    indexedCount: segment ? 1 : 0,
+    mode: segment ? ("keyword_only" as const) : ("empty" as const),
+  };
+};
+
+export const reindexMaterialOutlineSceneForAttachedProjects = async (
+  materialId: string,
+  sceneId: string,
+  settings: PersistedAppSettings
+) => {
+  const material = getMaterialById(materialId);
+  if (!material) {
+    throw new Error("素材不存在。");
+  }
+
+  const projectIds = listProjectIdsByAssetId(materialId);
+  if (projectIds.length === 0) {
+    return [];
+  }
+
+  const results = await Promise.all(
+    projectIds.map(async (projectId) => {
+      const project = getProjectById(projectId);
+      if (!project) {
+        return null;
+      }
+
+      return indexProjectMaterialOutlineScene(material, sceneId, project, settings);
     })
   );
 

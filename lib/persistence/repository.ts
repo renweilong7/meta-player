@@ -782,7 +782,7 @@ export const lockProjectEmbeddingConfig = (projectId: string) => {
 };
 
 const deleteOutlineVectorRowsByColumn = (
-  column: "asset_id" | "project_id",
+  column: "asset_id" | "project_id" | "segment_id",
   value: string
 ) => {
   if (!isSqliteVecAvailable()) {
@@ -830,6 +830,44 @@ const insertOutlineVectorRecords = (records: OutlineVectorRecord[]) => {
       insertedCount += 1;
     }
   }
+
+  return insertedCount;
+};
+
+export const replaceProjectOutlineVectorsForSegment = (input: {
+  projectId: string;
+  assetId: string;
+  segmentId: string;
+  embeddingModel: string;
+  startSeconds: number;
+  embedding: number[];
+}) => {
+  if (!isSqliteVecAvailable()) {
+    return 0;
+  }
+
+  let insertedCount = 0;
+
+  runInTransaction(() => {
+    const database = getDatabase();
+
+    for (const tableName of listOutlineVectorTableNames()) {
+      database
+        .prepare(`DELETE FROM ${tableName} WHERE project_id = ? AND segment_id = ?`)
+        .run(input.projectId, input.segmentId);
+    }
+
+    insertedCount = insertOutlineVectorRecords([
+      {
+        projectId: input.projectId,
+        assetId: input.assetId,
+        segmentId: input.segmentId,
+        embeddingModel: input.embeddingModel,
+        startSeconds: input.startSeconds,
+        embedding: input.embedding,
+      },
+    ]);
+  });
 
   return insertedCount;
 };
@@ -1736,6 +1774,74 @@ export const replaceOutlineSegmentsForAsset = (
         now
       );
     }
+
+    database.prepare("UPDATE asset SET updated_at = ? WHERE id = ?").run(now, assetId);
+  });
+};
+
+export const replaceOutlineSegmentForAsset = (
+  assetId: string,
+  segment: Omit<StoryOutlineSearchSegment, "assetTitle"> & {
+    assetTitle: string;
+    embedding?: number[];
+    embeddingModel?: string | null;
+    embeddingStatus?: "idle" | "loading" | "success" | "error";
+    embeddingError?: string | null;
+  }
+) => {
+  const database = getDatabase();
+  const now = toIsoNow();
+
+  runInTransaction(() => {
+    database
+      .prepare(`
+        INSERT INTO asset_outline_segment (
+          id,
+          asset_id,
+          scene_id,
+          scene_title,
+          scene_description,
+          start_seconds,
+          end_seconds,
+          timestamp_text,
+          searchable_text,
+          embedding_json,
+          embedding_model,
+          embedding_status,
+          embedding_error,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          asset_id = excluded.asset_id,
+          scene_id = excluded.scene_id,
+          scene_title = excluded.scene_title,
+          scene_description = excluded.scene_description,
+          start_seconds = excluded.start_seconds,
+          end_seconds = excluded.end_seconds,
+          timestamp_text = excluded.timestamp_text,
+          searchable_text = excluded.searchable_text,
+          embedding_json = excluded.embedding_json,
+          embedding_model = excluded.embedding_model,
+          embedding_status = excluded.embedding_status,
+          embedding_error = excluded.embedding_error,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        segment.id,
+        assetId,
+        segment.sceneId,
+        segment.sceneTitle,
+        segment.sceneDescription,
+        segment.startSeconds,
+        segment.endSeconds,
+        segment.timestamp,
+        segment.searchableText,
+        segment.embedding ? JSON.stringify(segment.embedding) : null,
+        segment.embeddingModel ?? null,
+        segment.embeddingStatus ?? "idle",
+        segment.embeddingError ?? null,
+        now
+      );
 
     database.prepare("UPDATE asset SET updated_at = ? WHERE id = ?").run(now, assetId);
   });
