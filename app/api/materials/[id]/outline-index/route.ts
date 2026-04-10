@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getSettings } from "@/lib/persistence/repository";
 import { indexMaterialOutlineById } from "@/lib/story-outline/index";
 
 export const runtime = "nodejs";
 
-export async function POST(
+const postHandler = async (
   _request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.outline_basic");
     const { id } = await context.params;
@@ -24,4 +25,9 @@ export async function POST(
 
     return NextResponse.json({ message }, { status: 500 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/materials/[id]/outline-index" },
+  postHandler
+);

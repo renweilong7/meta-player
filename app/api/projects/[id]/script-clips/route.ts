@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { createProjectScriptClip } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
 
-export async function POST(
+const postHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.material_management");
     const { id } = await context.params;
@@ -49,4 +50,9 @@ export async function POST(
     const message = error instanceof Error ? error.message : "生成片段失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/projects/[id]/script-clips" },
+  postHandler
+);

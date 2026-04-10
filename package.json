@@ -4,7 +4,7 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "generate:icons": "node scripts/generate-icons.mjs",
     "prepare:python-runtime": "node scripts/prepare-python-runtime.mjs",
     "build": "next build --webpack",

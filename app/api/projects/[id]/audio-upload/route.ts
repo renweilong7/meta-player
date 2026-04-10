@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getProjectById, getSettings, updateProject } from "@/lib/persistence/repository";
 
@@ -16,10 +17,10 @@ const sanitizeExtension = (filename: string) => {
   return extension;
 };
 
-export async function POST(
+const postHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.project_management");
     const { id } = await context.params;
@@ -66,4 +67,9 @@ export async function POST(
     const message = error instanceof Error ? error.message : "导入项目音频失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/projects/[id]/audio-upload" },
+  postHandler
+);

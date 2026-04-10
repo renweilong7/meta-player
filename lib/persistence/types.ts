@@ -72,6 +72,8 @@ export interface PersistedAiUsageSnapshot {
 export interface PersistedAppSettings {
   materialSavePath: string;
   defaultManagedImport: boolean;
+  ffmpegExecutablePath: string;
+  ffprobeExecutablePath: string;
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;

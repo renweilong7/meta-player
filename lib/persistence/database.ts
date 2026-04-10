@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createServerLogger, formatErrorForLog } from "@/lib/observability/logger";
 import {
   getAppDataDirectory,
   resolveBundledSqliteVecPath,
@@ -18,6 +19,9 @@ const DATABASE_PATH = join(APP_DATA_DIRECTORY, "meta-player.db");
 const DEFAULT_MATERIAL_DIRECTORY = join(APP_DATA_DIRECTORY, "materials");
 const SQLITE_VEC_PATH_ENV = "META_PLAYER_SQLITE_VEC_PATH";
 const SQLITE_VEC_TABLE_PREFIX = "outline_segment_vec_";
+const logger = createServerLogger("server", {
+  component: "database",
+});
 
 let databaseInstance: DatabaseSync | null = null;
 let sqliteVecExtensionLoaded = false;
@@ -28,6 +32,10 @@ const ensuredVectorTableDimensions = new Set<number>();
 const ensureAppDataDirectory = () => {
   mkdirSync(APP_DATA_DIRECTORY, { recursive: true });
   mkdirSync(DEFAULT_MATERIAL_DIRECTORY, { recursive: true });
+  logger.info("database.directories.ready", {
+    appDataDirectory: APP_DATA_DIRECTORY,
+    materialDirectory: DEFAULT_MATERIAL_DIRECTORY,
+  });
 };
 
 const getSqliteVecFilename = () => {
@@ -53,6 +61,9 @@ const loadSqliteVecExtension = (database: DatabaseSync) => {
 
   if (!extensionPath) {
     sqliteVecLoadError = `${SQLITE_VEC_PATH_ENV} 未设置，且默认目录中未找到 sqlite-vec 扩展。`;
+    logger.warn("database.sqlite_vec.unavailable", {
+      error: sqliteVecLoadError,
+    });
     return;
   }
 
@@ -61,11 +72,18 @@ const loadSqliteVecExtension = (database: DatabaseSync) => {
     sqliteVecExtensionLoaded = true;
     sqliteVecExtensionPath = extensionPath;
     sqliteVecLoadError = null;
+    logger.info("database.sqlite_vec.loaded", {
+      extensionPath,
+    });
   } catch (error) {
     sqliteVecExtensionLoaded = false;
     sqliteVecExtensionPath = extensionPath;
     sqliteVecLoadError =
       error instanceof Error ? error.message : "sqlite-vec 扩展加载失败。";
+    logger.error("database.sqlite_vec.load_failed", {
+      extensionPath,
+      error: formatErrorForLog(error),
+    });
   }
 };
 

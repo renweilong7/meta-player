@@ -8,6 +8,7 @@ const desktopBridge = {
   saveFile: (targetPath, bytes) =>
     ipcRenderer.invoke("meta-player:save-file", targetPath, bytes),
   openPath: (targetPath) => ipcRenderer.invoke("meta-player:open-path", targetPath),
+  exportDiagnostics: () => ipcRenderer.invoke("meta-player:export-diagnostics"),
   openExternal: (targetUrl) =>
     ipcRenderer.invoke("meta-player:open-external", targetUrl),
 };

@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { getAiUsageSnapshot, recordAiUsageEvent } from "@/lib/persistence/repository";
 import { PersistedAiUsageRecord } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+const getHandler = async () => {
   return NextResponse.json(getAiUsageSnapshot());
-}
+};
 
-export async function POST(request: Request) {
+const postHandler = async (request: Request) => {
   try {
     const body = (await request.json()) as Partial<PersistedAiUsageRecord>;
 
@@ -43,4 +44,7 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "写入用量记录失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const GET = withRouteLogging({ route: "/api/usage" }, getHandler);
+export const POST = withRouteLogging({ route: "/api/usage" }, postHandler);

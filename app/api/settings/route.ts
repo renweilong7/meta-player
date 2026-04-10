@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getSettings, saveSettings } from "@/lib/persistence/repository";
 import { PersistedAppSettings } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+const getHandler = async () => {
   return NextResponse.json(getSettings());
-}
+};
 
-export async function PUT(request: Request) {
+const putHandler = async (request: Request) => {
   try {
     assertLicensedFeature("base.settings_basic");
     const body = (await request.json()) as Partial<PersistedAppSettings>;
@@ -19,6 +20,10 @@ export async function PUT(request: Request) {
       saveSettings({
         materialSavePath: body.materialSavePath ?? current.materialSavePath,
         defaultManagedImport: body.defaultManagedImport ?? current.defaultManagedImport,
+        ffmpegExecutablePath:
+          body.ffmpegExecutablePath ?? current.ffmpegExecutablePath,
+        ffprobeExecutablePath:
+          body.ffprobeExecutablePath ?? current.ffprobeExecutablePath,
         aiApiBaseUrl: body.aiApiBaseUrl ?? current.aiApiBaseUrl,
         aiApiKey: body.aiApiKey ?? current.aiApiKey,
         aiModelName: body.aiModelName ?? current.aiModelName,
@@ -47,4 +52,7 @@ export async function PUT(request: Request) {
     const message = error instanceof Error ? error.message : "保存设置失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const GET = withRouteLogging({ route: "/api/settings" }, getHandler);
+export const PUT = withRouteLogging({ route: "/api/settings" }, putHandler);

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { getProjectScriptItemById } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
@@ -19,10 +20,10 @@ const getMimeType = (absolutePath: string) => {
   return "application/octet-stream";
 };
 
-export async function GET(
+const getHandler = async (
   _request: Request,
   context: { params: Promise<{ id: string; itemId: string }> }
-) {
+) => {
   const { itemId } = await context.params;
   const item = getProjectScriptItemById(itemId);
 
@@ -38,4 +39,9 @@ export async function GET(
       "Cache-Control": "no-store",
     },
   });
-}
+};
+
+export const GET = withRouteLogging(
+  { route: "/api/projects/[id]/script-items/[itemId]/audio" },
+  getHandler
+);

@@ -1,14 +1,15 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { createMaterialMarker } from "@/lib/persistence/repository";
 import { MaterialMarkerCreateInput } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
 
-export async function POST(
+const postHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("pro.marker");
     const { id } = await context.params;
@@ -33,4 +34,9 @@ export async function POST(
 
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/materials/[id]/markers" },
+  postHandler
+);

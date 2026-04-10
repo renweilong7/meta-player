@@ -1,8 +1,9 @@
-import { createReadStream, statSync } from "node:fs";
-import { Readable } from "node:stream";
+import { statSync } from "node:fs";
 import { extname } from "node:path";
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { getMaterialFileDescriptor } from "@/lib/persistence/repository";
+import { createFileStreamResponse } from "@/lib/runtime/node-stream-response";
 
 export const runtime = "nodejs";
 
@@ -39,10 +40,10 @@ const getMimeType = (filename: string, mediaType: "video" | "image") => {
  * 1. Next 页面运行在 `http://localhost`，直接读 `file://` 本地文件不稳定。
  * 2. 视频播放需要 `Range` 支持，否则拖动和分段加载都会出问题。
  */
-export async function GET(
+const getHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   const { id } = await context.params;
   const descriptor = getMaterialFileDescriptor(id);
 
@@ -57,10 +58,9 @@ export async function GET(
   const range = request.headers.get("range");
 
   if (!range) {
-    const stream = createReadStream(absolutePath);
-
-    return new Response(Readable.toWeb(stream) as ReadableStream, {
-      status: 200,
+    return createFileStreamResponse({
+      absolutePath,
+      signal: request.signal,
       headers: {
         "Content-Type": mimeType,
         "Content-Length": totalSize.toString(),
@@ -93,11 +93,14 @@ export async function GET(
     });
   }
 
-  const stream = createReadStream(absolutePath, { start, end });
   const chunkSize = end - start + 1;
 
-  return new Response(Readable.toWeb(stream) as ReadableStream, {
+  return createFileStreamResponse({
+    absolutePath,
+    start,
+    end,
     status: 206,
+    signal: request.signal,
     headers: {
       "Content-Type": mimeType,
       "Content-Length": chunkSize.toString(),
@@ -106,4 +109,9 @@ export async function GET(
       "Cache-Control": "no-store",
     },
   });
-}
+};
+
+export const GET = withRouteLogging(
+  { route: "/api/materials/[id]/file" },
+  getHandler
+);

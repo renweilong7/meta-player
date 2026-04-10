@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import {
   assertLicensedFeature,
   LicenseAccessError,
@@ -9,7 +10,7 @@ import { searchProjectOutline } from "@/lib/story-outline/index";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+const postHandler = async (request: Request) => {
   const body = (await request.json()) as {
     projectId?: string;
     query?: string;
@@ -48,4 +49,9 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "剧情搜索失败。";
     return NextResponse.json({ message }, { status: 500 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/story-outline/search" },
+  postHandler
+);

@@ -119,3 +119,52 @@ export const resolveBundledSqliteVecPath = (filename: string) => {
 
   return candidates.find(isExistingPath) ?? null;
 };
+
+const resolveBinaryCandidate = (input: {
+  explicitPath?: string | null;
+  executableName: string;
+  fallbackAbsolutePaths?: string[];
+}) => {
+  const explicitPath = input.explicitPath?.trim();
+  const bundledCandidates = getBundledAppRootCandidates().map((rootPath) =>
+    join(rootPath, "bin", input.executableName)
+  );
+  const electronResourcesPath = getElectronResourcesPath();
+  const candidates = [
+    explicitPath,
+    ...bundledCandidates,
+    electronResourcesPath ? join(electronResourcesPath, "bin", input.executableName) : null,
+    ...(input.fallbackAbsolutePaths ?? []),
+  ];
+
+  const resolvedAbsolutePath = candidates.find(isExistingPath) ?? null;
+  if (resolvedAbsolutePath) {
+    return resolvedAbsolutePath;
+  }
+
+  return process.env.NODE_ENV === "production" ? null : input.executableName;
+};
+
+export const resolveFfmpegExecutable = (explicitPath?: string | null) =>
+  resolveBinaryCandidate({
+    explicitPath,
+    executableName: process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg",
+    fallbackAbsolutePaths:
+      process.platform === "darwin"
+        ? ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+        : process.platform === "win32"
+          ? []
+          : ["/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"],
+  });
+
+export const resolveFfprobeExecutable = (explicitPath?: string | null) =>
+  resolveBinaryCandidate({
+    explicitPath,
+    executableName: process.platform === "win32" ? "ffprobe.exe" : "ffprobe",
+    fallbackAbsolutePaths:
+      process.platform === "darwin"
+        ? ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
+        : process.platform === "win32"
+          ? []
+          : ["/usr/local/bin/ffprobe", "/usr/bin/ffprobe"],
+  });

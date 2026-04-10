@@ -1,6 +1,10 @@
 "use client";
 
 import {
+  buildClientDiagnosticHeaders,
+  reportClientDiagnosticEvent,
+} from "@/lib/observability/client";
+import {
   PersistedAiUsageRecord,
   PersistedAiUsageSnapshot,
   LocalEmbeddingModelOption,
@@ -19,6 +23,51 @@ import {
 import { AuthorizationSnapshot } from "@/lib/license/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
+const getRequestUrlLabel = (input: RequestInfo | URL) =>
+  typeof input === "string"
+    ? input
+    : input instanceof URL
+      ? input.toString()
+      : input.url;
+
+const fetchWithDiagnostics = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const url = getRequestUrlLabel(input);
+
+  try {
+    const response = await fetch(input, {
+      ...init,
+      headers: buildClientDiagnosticHeaders(init?.headers),
+    });
+
+    if (!response.ok) {
+      void reportClientDiagnosticEvent({
+        level: response.status >= 500 ? "error" : "warn",
+        event: "api.response_error",
+        details: {
+          method,
+          url,
+          status: response.status,
+          serverRequestId: response.headers.get("x-meta-player-request-id") ?? undefined,
+        },
+      });
+    }
+
+    return response;
+  } catch (error) {
+    void reportClientDiagnosticEvent({
+      level: "error",
+      event: "api.network_error",
+      details: {
+        method,
+        url,
+      },
+      error,
+    });
+    throw error;
+  }
+};
+
 const assertOk = async (response: Response) => {
   if (response.ok) {
     return response;
@@ -36,21 +85,30 @@ const assertOk = async (response: Response) => {
       if (text.trim()) {
         message = text;
       }
-    } catch {
+  } catch {
       // 忽略非 JSON 错误体，使用默认错误文案。
     }
+  }
+
+  const requestId = response.headers.get("x-meta-player-request-id");
+  if (requestId) {
+    message = `${message}（诊断 ID: ${requestId}）`;
   }
 
   throw new Error(message);
 };
 
 export const fetchLibrarySnapshot = async (): Promise<PersistedLibrarySnapshot> => {
-  const response = await assertOk(await fetch("/api/bootstrap", { cache: "no-store" }));
+  const response = await assertOk(
+    await fetchWithDiagnostics("/api/bootstrap", { cache: "no-store" })
+  );
   return (await response.json()) as PersistedLibrarySnapshot;
 };
 
 export const fetchAiUsageSnapshot = async (): Promise<PersistedAiUsageSnapshot> => {
-  const response = await assertOk(await fetch("/api/usage", { cache: "no-store" }));
+  const response = await assertOk(
+    await fetchWithDiagnostics("/api/usage", { cache: "no-store" })
+  );
   return (await response.json()) as PersistedAiUsageSnapshot;
 };
 
@@ -58,7 +116,7 @@ export const postAiUsageRecord = async (
   input: Partial<PersistedAiUsageRecord>
 ): Promise<void> => {
   await assertOk(
-    await fetch("/api/usage", {
+    await fetchWithDiagnostics("/api/usage", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -71,7 +129,7 @@ export const postAiUsageRecord = async (
 export const fetchAuthorizationSnapshot =
   async (): Promise<AuthorizationSnapshot> => {
     const response = await assertOk(
-      await fetch("/api/device-identity", { cache: "no-store" })
+      await fetchWithDiagnostics("/api/device-identity", { cache: "no-store" })
     );
     return (await response.json()) as AuthorizationSnapshot;
   };
@@ -88,7 +146,7 @@ export const fetchAuthorizationSnapshot =
 export const refreshAuthorizationSnapshot =
   async (): Promise<AuthorizationSnapshot> => {
     await assertOk(
-      await fetch("/api/license", {
+      await fetchWithDiagnostics("/api/license", {
         method: "POST",
       })
     );
@@ -111,7 +169,7 @@ export const importMaterials = async (
   }
 
   const response = await assertOk(
-    await fetch("/api/materials/import", {
+    await fetchWithDiagnostics("/api/materials/import", {
       method: "POST",
       body: formData,
     })
@@ -126,7 +184,7 @@ export const patchMaterial = async (
   patch: MaterialPatchInput
 ): Promise<PersistedMaterial> => {
   const response = await assertOk(
-    await fetch(`/api/materials/${id}`, {
+    await fetchWithDiagnostics(`/api/materials/${id}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -143,7 +201,7 @@ export const generateMaterialSceneShotAnalysis = async (
   sceneId: string
 ): Promise<PersistedMaterial> => {
   const response = await assertOk(
-    await fetch(`/api/materials/${materialId}/shot-analysis`, {
+    await fetchWithDiagnostics(`/api/materials/${materialId}/shot-analysis`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -160,7 +218,7 @@ export const postMaterialMarker = async (
   input: MaterialMarkerCreateInput
 ): Promise<PersistedMaterial> => {
   const response = await assertOk(
-    await fetch(`/api/materials/${id}/markers`, {
+    await fetchWithDiagnostics(`/api/materials/${id}/markers`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -178,7 +236,7 @@ export const patchMaterialMarker = async (
   input: MaterialMarkerUpdateInput
 ): Promise<PersistedMaterial> => {
   const response = await assertOk(
-    await fetch(`/api/materials/${materialId}/markers/${markerId}`, {
+    await fetchWithDiagnostics(`/api/materials/${materialId}/markers/${markerId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -195,7 +253,7 @@ export const removeMaterialMarker = async (
   markerId: string
 ) => {
   await assertOk(
-    await fetch(`/api/materials/${materialId}/markers/${markerId}`, {
+    await fetchWithDiagnostics(`/api/materials/${materialId}/markers/${markerId}`, {
       method: "DELETE",
     })
   );
@@ -203,7 +261,7 @@ export const removeMaterialMarker = async (
 
 export const removeMaterial = async (id: string) => {
   await assertOk(
-    await fetch(`/api/materials/${id}`, {
+    await fetchWithDiagnostics(`/api/materials/${id}`, {
       method: "DELETE",
     })
   );
@@ -213,7 +271,7 @@ export const putSettings = async (
   settings: PersistedAppSettings
 ): Promise<PersistedAppSettings> => {
   const response = await assertOk(
-    await fetch("/api/settings", {
+    await fetchWithDiagnostics("/api/settings", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
@@ -232,7 +290,7 @@ export const fetchLocalEmbeddingModels = async (
     ? `?directory=${encodeURIComponent(directory)}`
     : "";
   const response = await assertOk(
-    await fetch(`/api/settings/local-embedding-models${query}`, {
+    await fetchWithDiagnostics(`/api/settings/local-embedding-models${query}`, {
       cache: "no-store",
     })
   );
@@ -243,11 +301,54 @@ export const fetchLocalEmbeddingModels = async (
   return payload.models ?? [];
 };
 
+export const validateMediaToolExecutables = async (input: {
+  ffmpegExecutablePath?: string;
+  ffprobeExecutablePath?: string;
+}): Promise<{
+  ffmpeg: {
+    ok: boolean;
+    resolvedPath: string | null;
+    version: string | null;
+    message: string;
+  };
+  ffprobe: {
+    ok: boolean;
+    resolvedPath: string | null;
+    version: string | null;
+    message: string;
+  };
+}> => {
+  const response = await assertOk(
+    await fetchWithDiagnostics("/api/settings/media-tools", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    })
+  );
+
+  return (await response.json()) as {
+    ffmpeg: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+    ffprobe: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+  };
+};
+
 export const postProject = async (
   input: ProjectCreateInput
 ): Promise<PersistedProject> => {
   const response = await assertOk(
-    await fetch("/api/projects", {
+    await fetchWithDiagnostics("/api/projects", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -264,7 +365,7 @@ export const patchProject = async (
   patch: ProjectUpdateInput
 ): Promise<PersistedProject> => {
   const response = await assertOk(
-    await fetch(`/api/projects/${id}`, {
+    await fetchWithDiagnostics(`/api/projects/${id}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -285,7 +386,7 @@ export const uploadProjectAudio = async (
   formData.append("originalPath", input.originalPath ?? "");
 
   const response = await assertOk(
-    await fetch(`/api/projects/${projectId}/audio-upload`, {
+    await fetchWithDiagnostics(`/api/projects/${projectId}/audio-upload`, {
       method: "POST",
       body: formData,
     })
@@ -296,7 +397,7 @@ export const uploadProjectAudio = async (
 
 export const fetchProject = async (id: string): Promise<PersistedProject> => {
   const response = await assertOk(
-    await fetch(`/api/projects/${id}`, {
+    await fetchWithDiagnostics(`/api/projects/${id}`, {
       cache: "no-store",
     })
   );
@@ -309,7 +410,7 @@ export const generateProjectScriptItemTts = async (
   itemId: string
 ) => {
   const response = await assertOk(
-    await fetch(`/api/projects/${projectId}/script-items/${itemId}/tts`, {
+    await fetchWithDiagnostics(`/api/projects/${projectId}/script-items/${itemId}/tts`, {
       method: "POST",
     })
   );
@@ -324,7 +425,7 @@ export const combineProjectScriptItems = async (
   }
 ): Promise<PersistedProject> => {
   const response = await assertOk(
-    await fetch(`/api/projects/${projectId}/script-items/combine`, {
+    await fetchWithDiagnostics(`/api/projects/${projectId}/script-items/combine`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -338,7 +439,7 @@ export const combineProjectScriptItems = async (
 
 export const removeProject = async (id: string) => {
   await assertOk(
-    await fetch(`/api/projects/${id}`, {
+    await fetchWithDiagnostics(`/api/projects/${id}`, {
       method: "DELETE",
     })
   );
@@ -348,7 +449,7 @@ export const indexMaterialOutline = async (
   id: string
 ): Promise<{ indexedCount: number; mode: "embedding" | "keyword_only" | "empty" }> => {
   const response = await assertOk(
-    await fetch(`/api/materials/${id}/outline-index`, {
+    await fetchWithDiagnostics(`/api/materials/${id}/outline-index`, {
       method: "POST",
     })
   );
@@ -368,7 +469,7 @@ export const searchProjectStoryOutline = async (
   results: StoryOutlineSearchResult[];
 }> => {
   const response = await assertOk(
-    await fetch("/api/story-outline/search", {
+    await fetchWithDiagnostics("/api/story-outline/search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -400,7 +501,7 @@ export const createProjectScriptClip = async (
   }
 ): Promise<PersistedProject> => {
   const response = await assertOk(
-    await fetch(`/api/projects/${projectId}/script-clips`, {
+    await fetchWithDiagnostics(`/api/projects/${projectId}/script-clips`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -420,7 +521,7 @@ export const compileProjectClipSequence = async (
   }
 ): Promise<PersistedProjectClipCompilation> => {
   const response = await assertOk(
-    await fetch(`/api/projects/${projectId}/script-clip-compilations`, {
+    await fetchWithDiagnostics(`/api/projects/${projectId}/script-clip-compilations`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

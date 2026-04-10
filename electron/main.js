@@ -1,8 +1,10 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
 const {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   writeFileSync,
 } = require("node:fs");
 const http = require("node:http");
@@ -14,8 +16,35 @@ const PRODUCTION_HOST = "127.0.0.1";
 
 let productionServerStartupPromise = null;
 
+const getAppDataDirectory = () =>
+  (process.env.META_PLAYER_DATA_DIR || path.join(process.cwd(), ".meta-player")).trim();
+
 const getStartupLogPath = () =>
   path.join(app.getPath("userData"), "startup.log");
+
+const getMainLogDirectory = () => path.join(getAppDataDirectory(), "logs");
+
+const getMainLogPath = () => {
+  const date = new Date().toISOString().slice(0, 10);
+  return path.join(getMainLogDirectory(), `electron-main-${date}.log`);
+};
+
+const writeMainLog = (level, event, context = {}) => {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    runtime: "electron-main",
+    context,
+  };
+
+  try {
+    mkdirSync(getMainLogDirectory(), { recursive: true });
+    appendFileSync(getMainLogPath(), `${JSON.stringify(entry)}\n`);
+  } catch (error) {
+    console.error("Failed to write main log:", error);
+  }
+};
 
 const writeStartupLog = (message) => {
   const timestamp = new Date().toISOString();
@@ -24,6 +53,7 @@ const writeStartupLog = (message) => {
   try {
     mkdirSync(app.getPath("userData"), { recursive: true });
     appendFileSync(getStartupLogPath(), line);
+    writeMainLog("info", "startup.log", { message });
   } catch (error) {
     console.error("Failed to write startup log:", error);
   }
@@ -40,6 +70,10 @@ const formatError = (error) => {
 const reportStartupError = (title, error) => {
   const detail = formatError(error);
   writeStartupLog(`${title}: ${detail}`);
+  writeMainLog("error", "startup.error", {
+    title,
+    detail,
+  });
 
   if (!app.isReady()) {
     return;
@@ -64,6 +98,9 @@ const resolveProductionServerPath = () => {
   }
 
   writeStartupLog(`Resolved production server path: ${resolved}`);
+  writeMainLog("info", "server.path_resolved", {
+    resolved,
+  });
   return resolved;
 };
 
@@ -100,6 +137,11 @@ const startProductionServer = async () => {
     const url = `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
 
     writeStartupLog(`Starting production server from ${serverPath}`);
+    writeMainLog("info", "server.starting", {
+      serverPath,
+      host: PRODUCTION_HOST,
+      port: PRODUCTION_PORT,
+    });
 
     process.env.NODE_ENV = "production";
     process.env.HOSTNAME = PRODUCTION_HOST;
@@ -117,6 +159,7 @@ const startProductionServer = async () => {
     writeStartupLog(`Waiting for production server at ${url}`);
     await waitForServer(url);
     writeStartupLog(`Production server is ready at ${url}`);
+    writeMainLog("info", "server.ready", { url });
     return url;
   })().catch((error) => {
     productionServerStartupPromise = null;
@@ -157,6 +200,9 @@ const applyProductionWindowHardening = (mainWindow) => {
 
 const createWindow = async () => {
   writeStartupLog(`Creating window. isDev=${String(isDev)}`);
+  writeMainLog("info", "window.creating", {
+    isDev,
+  });
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -179,6 +225,7 @@ const createWindow = async () => {
   writeStartupLog(`Loading window URL: ${url}`);
   await mainWindow.loadURL(url);
   writeStartupLog(`Window URL loaded: ${url}`);
+  writeMainLog("info", "window.loaded", { url });
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
@@ -187,6 +234,11 @@ const createWindow = async () => {
 
 app.whenReady().then(() => {
   writeStartupLog("App is ready.");
+  writeMainLog("info", "app.ready", {
+    isDev,
+    userDataPath: app.getPath("userData"),
+    appDataDirectory: getAppDataDirectory(),
+  });
   if (!isDev) {
     Menu.setApplicationMenu(null);
   }
@@ -232,6 +284,55 @@ app.whenReady().then(() => {
     return shell.showItemInFolder(targetPath);
   });
 
+  ipcMain.handle("meta-player:export-diagnostics", async () => {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const bundleDirectory = path.join(
+      app.getPath("userData"),
+      "diagnostics",
+      `meta-player-diagnostics-${timestamp}`
+    );
+    const logsDirectory = path.join(bundleDirectory, "logs");
+
+    mkdirSync(logsDirectory, { recursive: true });
+
+    if (existsSync(getStartupLogPath())) {
+      copyFileSync(getStartupLogPath(), path.join(logsDirectory, "startup.log"));
+    }
+
+    const structuredLogDirectory = getMainLogDirectory();
+    if (existsSync(structuredLogDirectory)) {
+      readdirSync(structuredLogDirectory).forEach((entry) => {
+        const sourcePath = path.join(structuredLogDirectory, entry);
+        const targetPath = path.join(logsDirectory, entry);
+        copyFileSync(sourcePath, targetPath);
+      });
+    }
+
+    writeFileSync(
+      path.join(bundleDirectory, "metadata.json"),
+      JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          appVersion: app.getVersion(),
+          isPackaged: app.isPackaged,
+          platform: process.platform,
+          arch: process.arch,
+          userDataPath: app.getPath("userData"),
+          appDataDirectory: getAppDataDirectory(),
+          logDirectory: structuredLogDirectory,
+        },
+        null,
+        2
+      )
+    );
+
+    writeMainLog("info", "diagnostics.exported", {
+      bundleDirectory,
+    });
+
+    return bundleDirectory;
+  });
+
   ipcMain.handle("meta-player:open-external", async (_event, targetUrl) => {
     if (typeof targetUrl !== "string" || !targetUrl.trim()) {
       throw new Error("缺少外部链接。");
@@ -248,6 +349,10 @@ app.whenReady().then(() => {
     const parentDirectory = path.dirname(targetPath);
     mkdirSync(parentDirectory, { recursive: true });
     writeFileSync(targetPath, Buffer.from(bytes));
+    writeMainLog("info", "file.saved", {
+      targetPath,
+      byteLength: Array.isArray(bytes) ? bytes.length : Buffer.from(bytes).length,
+    });
     return targetPath;
   });
 

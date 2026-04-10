@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import {
   appendMaterialsToProject,
@@ -27,7 +28,7 @@ const isUploadedFileLike = (entry: FormDataEntryValue): boolean =>
  * - 解析浏览器上传的文件。
  * - 调用仓储层完成哈希去重和落盘。
  */
-export async function POST(request: Request) {
+const postHandler = async (request: Request) => {
   try {
     assertLicensedFeature("base.material_management");
     const formData = await request.formData();
@@ -84,4 +85,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ message }, { status: 500 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/materials/import" },
+  postHandler
+);

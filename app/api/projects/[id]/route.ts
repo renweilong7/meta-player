@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import {
   deleteProject,
@@ -9,10 +10,10 @@ import { ProjectUpdateInput } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
 
-export async function GET(
+const getHandler = async (
   _request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   const { id } = await context.params;
   const project = getProjectById(id);
 
@@ -21,12 +22,12 @@ export async function GET(
   }
 
   return NextResponse.json(project);
-}
+};
 
-export async function PATCH(
+const patchHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.project_management");
     const { id } = await context.params;
@@ -48,12 +49,12 @@ export async function PATCH(
 
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
 
-export async function DELETE(
+const deleteHandler = async (
   _request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.project_management");
     const { id } = await context.params;
@@ -72,4 +73,14 @@ export async function DELETE(
     const message = error instanceof Error ? error.message : "删除项目失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const GET = withRouteLogging({ route: "/api/projects/[id]" }, getHandler);
+export const PATCH = withRouteLogging(
+  { route: "/api/projects/[id]" },
+  patchHandler
+);
+export const DELETE = withRouteLogging(
+  { route: "/api/projects/[id]" },
+  deleteHandler
+);

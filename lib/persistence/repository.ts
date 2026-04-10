@@ -21,7 +21,11 @@ import {
   isSqliteVecAvailable,
   listOutlineVectorTableNames,
 } from "@/lib/persistence/database";
-import { getDefaultLocalEmbeddingModelDirectory } from "@/lib/runtime/resource-paths";
+import {
+  getDefaultLocalEmbeddingModelDirectory,
+  resolveFfmpegExecutable,
+  resolveFfprobeExecutable,
+} from "@/lib/runtime/resource-paths";
 import {
   AiUsageAction,
   AiUsageProvider,
@@ -58,6 +62,8 @@ import { combineProjectScriptState } from "@/lib/project-script/srt";
 const SETTINGS_DEFAULTS: PersistedAppSettings = {
   materialSavePath: getDefaultMaterialDirectory(),
   defaultManagedImport: false,
+  ffmpegExecutablePath: "",
+  ffprobeExecutablePath: "",
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
@@ -619,8 +625,35 @@ const sanitizeExtension = (filename: string) => {
   return extension;
 };
 
-const probeVideoDurationSeconds = (absolutePath: string) => {
-  const stdout = execFileSync("/opt/homebrew/bin/ffprobe", [
+const getFfprobePath = (settings?: Pick<PersistedAppSettings, "ffprobeExecutablePath">) => {
+  const resolvedPath = resolveFfprobeExecutable(settings?.ffprobeExecutablePath);
+
+  if (!resolvedPath) {
+    throw new Error(
+      "未找到 ffprobe。请先在设置页填写 ffprobe 可执行文件路径。"
+    );
+  }
+
+  return resolvedPath;
+};
+
+const getFfmpegPath = (settings?: Pick<PersistedAppSettings, "ffmpegExecutablePath">) => {
+  const resolvedPath = resolveFfmpegExecutable(settings?.ffmpegExecutablePath);
+
+  if (!resolvedPath) {
+    throw new Error(
+      "未找到 ffmpeg。请先在设置页填写 ffmpeg 可执行文件路径。"
+    );
+  }
+
+  return resolvedPath;
+};
+
+const probeVideoDurationSeconds = (
+  absolutePath: string,
+  settings?: Pick<PersistedAppSettings, "ffprobeExecutablePath">
+) => {
+  const stdout = execFileSync(getFfprobePath(settings), [
     "-v",
     "error",
     "-show_entries",
@@ -654,7 +687,8 @@ const trimImportedVideoBuffer = (input: {
 
   try {
     writeFileSync(inputPath, input.buffer);
-    const durationSeconds = probeVideoDurationSeconds(inputPath);
+    const settings = getSettings();
+    const durationSeconds = probeVideoDurationSeconds(inputPath, settings);
     const trimDurationSeconds =
       durationSeconds - input.introTrimSeconds - input.outroTrimSeconds;
 
@@ -662,7 +696,7 @@ const trimImportedVideoBuffer = (input: {
       throw new Error("片头片尾时长之和不能大于或等于视频总时长。");
     }
 
-    execFileSync("/opt/homebrew/bin/ffmpeg", [
+    execFileSync(getFfmpegPath(settings), [
       "-y",
       "-i",
       inputPath,
@@ -1042,6 +1076,10 @@ export const getSettings = (): PersistedAppSettings => {
     defaultManagedImport:
       (stored.get("defaultManagedImport") ?? String(SETTINGS_DEFAULTS.defaultManagedImport)) ===
       "true",
+    ffmpegExecutablePath:
+      stored.get("ffmpegExecutablePath") ?? SETTINGS_DEFAULTS.ffmpegExecutablePath,
+    ffprobeExecutablePath:
+      stored.get("ffprobeExecutablePath") ?? SETTINGS_DEFAULTS.ffprobeExecutablePath,
     aiApiBaseUrl: stored.get("aiApiBaseUrl") ?? SETTINGS_DEFAULTS.aiApiBaseUrl,
     aiApiKey: stored.get("aiApiKey") ?? SETTINGS_DEFAULTS.aiApiKey,
     aiModelName: stored.get("aiModelName") ?? SETTINGS_DEFAULTS.aiModelName,
@@ -1079,6 +1117,8 @@ export const saveSettings = (settings: PersistedAppSettings) => {
   saveAppSettingValues({
     materialSavePath: settings.materialSavePath,
     defaultManagedImport: String(settings.defaultManagedImport),
+    ffmpegExecutablePath: settings.ffmpegExecutablePath,
+    ffprobeExecutablePath: settings.ffprobeExecutablePath,
     aiApiBaseUrl: settings.aiApiBaseUrl,
     aiApiKey: settings.aiApiKey,
     aiModelName: settings.aiModelName,
@@ -2766,7 +2806,9 @@ export const createProjectScriptClip = (input: {
   const outputPath = join(tempDirectory, "clip.mp4");
 
   try {
-    execFileSync("/opt/homebrew/bin/ffmpeg", [
+    const settings = getSettings();
+
+    execFileSync(getFfmpegPath(settings), [
       "-y",
       "-ss",
       String(Math.max(input.startSeconds, 0)),
@@ -2797,8 +2839,6 @@ export const createProjectScriptClip = (input: {
     ], {
       stdio: "ignore",
     });
-
-    const settings = getSettings();
     const projectClipDirectory = join(settings.materialSavePath, "project-clips");
     ensureDirectory(projectClipDirectory);
     const clipId = randomUUID();
@@ -2892,8 +2932,10 @@ export const compileProjectClips = (input: {
       "utf8"
     );
 
+    const settings = getSettings();
+
     execFileSync(
-      "/opt/homebrew/bin/ffmpeg",
+      getFfmpegPath(settings),
       [
         "-y",
         "-f",

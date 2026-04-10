@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { getMaterialById, getSettings, updateMaterial } from "@/lib/persistence/repository";
 import { generateSceneShotAnalysis } from "@/lib/story-outline/shot-analysis";
@@ -9,10 +10,10 @@ import {
 
 export const runtime = "nodejs";
 
-export async function POST(
+const postHandler = async (
   request: Request,
   context: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
     assertLicensedFeature("base.outline_basic");
     const { id } = await context.params;
@@ -68,4 +69,9 @@ export async function POST(
     const message = error instanceof Error ? error.message : "镜头解读生成失败。";
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/materials/[id]/shot-analysis" },
+  postHandler
+);

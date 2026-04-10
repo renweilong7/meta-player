@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { assertLicensedFeature, LicenseAccessError } from "@/lib/license/service";
 import { createProject, listProjects } from "@/lib/persistence/repository";
 import { ProjectCreateInput } from "@/lib/persistence/types";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+const getHandler = async () => {
   return NextResponse.json({ projects: listProjects() });
-}
+};
 
-export async function POST(request: Request) {
+const postHandler = async (request: Request) => {
   try {
     assertLicensedFeature("base.project_management");
     const body = (await request.json()) as ProjectCreateInput;
@@ -32,4 +33,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ message }, { status: 400 });
   }
-}
+};
+
+export const GET = withRouteLogging({ route: "/api/projects" }, getHandler);
+export const POST = withRouteLogging({ route: "/api/projects" }, postHandler);

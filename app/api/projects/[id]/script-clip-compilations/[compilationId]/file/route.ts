@@ -1,7 +1,9 @@
-import { createReadStream, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { extname } from "node:path";
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { getProjectClipCompilationFileById } from "@/lib/persistence/repository";
+import { createFileStreamResponse } from "@/lib/runtime/node-stream-response";
 
 export const runtime = "nodejs";
 
@@ -18,10 +20,10 @@ const getMimeType = (filename: string) => {
   }
 };
 
-export async function GET(
+const getHandler = async (
   request: Request,
   context: { params: Promise<{ id: string; compilationId: string }> }
-) {
+) => {
   const { id, compilationId } = await context.params;
   const descriptor = getProjectClipCompilationFileById(id, compilationId);
 
@@ -34,7 +36,9 @@ export async function GET(
   const mimeType = getMimeType(descriptor.filename);
 
   if (!range) {
-    return new NextResponse(createReadStream(descriptor.absolutePath) as never, {
+    return createFileStreamResponse({
+      absolutePath: descriptor.absolutePath,
+      signal: request.signal,
       headers: {
         "Content-Type": mimeType,
         "Content-Length": String(stats.size),
@@ -51,16 +55,22 @@ export async function GET(
   const start = Number(match[1]);
   const end = match[2] ? Number(match[2]) : stats.size - 1;
 
-  return new NextResponse(
-    createReadStream(descriptor.absolutePath, { start, end }) as never,
-    {
-      status: 206,
-      headers: {
-        "Content-Type": mimeType,
-        "Content-Length": String(end - start + 1),
-        "Content-Range": `bytes ${start}-${end}/${stats.size}`,
-        "Accept-Ranges": "bytes",
-      },
+  return createFileStreamResponse({
+    absolutePath: descriptor.absolutePath,
+    start,
+    end,
+    status: 206,
+    signal: request.signal,
+    headers: {
+      "Content-Type": mimeType,
+      "Content-Length": String(end - start + 1),
+      "Content-Range": `bytes ${start}-${end}/${stats.size}`,
+      "Accept-Ranges": "bytes",
     }
-  );
-}
+  });
+};
+
+export const GET = withRouteLogging(
+  { route: "/api/projects/[id]/script-clip-compilations/[compilationId]/file" },
+  getHandler
+);

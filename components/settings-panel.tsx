@@ -11,6 +11,7 @@ import {
   Save,
   Sparkles,
   RefreshCw,
+  Clapperboard,
 } from "lucide-react";
 import {
   Card,
@@ -39,6 +40,8 @@ import {
 export interface AppSettingsValues {
   materialSavePath: string;
   defaultManagedImport: boolean;
+  ffmpegExecutablePath: string;
+  ffprobeExecutablePath: string;
   aiApiBaseUrl: string;
   aiApiKey: string;
   aiModelName: string;
@@ -60,6 +63,21 @@ interface SettingsPanelProps {
   values: AppSettingsValues;
   hasPendingChanges?: boolean;
   isSaving?: boolean;
+  isCheckingMediaTools?: boolean;
+  mediaToolsCheckResult?: {
+    ffmpeg: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+    ffprobe: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+  } | null;
   localEmbeddingModels?: LocalEmbeddingModelOption[];
   isLoadingLocalEmbeddingModels?: boolean;
   onChangeField: (
@@ -67,6 +85,7 @@ interface SettingsPanelProps {
     value: string | boolean
   ) => void;
   onSave: () => void;
+  onCheckMediaTools?: () => void;
   onBrowseMaterialDirectory?: () => void;
   onBrowseLocalEmbeddingModelDirectory?: () => void;
   onRefreshLocalEmbeddingModels?: () => void;
@@ -76,10 +95,13 @@ export function SettingsPanel({
   values,
   hasPendingChanges = false,
   isSaving = false,
+  isCheckingMediaTools = false,
+  mediaToolsCheckResult = null,
   localEmbeddingModels = [],
   isLoadingLocalEmbeddingModels = false,
   onChangeField,
   onSave,
+  onCheckMediaTools,
   onBrowseMaterialDirectory,
   onBrowseLocalEmbeddingModelDirectory,
   onRefreshLocalEmbeddingModels,
@@ -89,6 +111,8 @@ export function SettingsPanel({
   const normalizedValues: AppSettingsValues = {
     materialSavePath: values.materialSavePath ?? "",
     defaultManagedImport: values.defaultManagedImport ?? false,
+    ffmpegExecutablePath: values.ffmpegExecutablePath ?? "",
+    ffprobeExecutablePath: values.ffprobeExecutablePath ?? "",
     aiApiBaseUrl: values.aiApiBaseUrl ?? "",
     aiApiKey: values.aiApiKey ?? "",
     aiModelName: values.aiModelName ?? "",
@@ -583,6 +607,122 @@ export function SettingsPanel({
                       </FieldDescription>
                     </FieldContent>
                   </Field>
+                </div>
+              </FieldGroup>
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0">
+            <CardHeader className="border-b border-border">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Clapperboard className="h-4 w-4 text-primary" />
+                媒体工具
+              </CardTitle>
+              <CardDescription>
+                配置本地 `ffmpeg` 和 `ffprobe` 路径，用于镜头解读裁片、视频裁剪与片段合成。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="ffmpeg-executable-path">
+                    ffmpeg 可执行文件路径
+                  </FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="ffmpeg-executable-path"
+                      value={normalizedValues.ffmpegExecutablePath}
+                      onChange={(event) =>
+                        onChangeField("ffmpegExecutablePath", event.target.value)
+                      }
+                      placeholder="/opt/homebrew/bin/ffmpeg"
+                      className="h-10"
+                    />
+                    <FieldDescription>
+                      用于镜头解读生成临时视频片段，以及项目片段裁剪、合成。留空时会尝试系统默认路径。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="ffprobe-executable-path">
+                    ffprobe 可执行文件路径
+                  </FieldLabel>
+                  <FieldContent>
+                    <Input
+                      id="ffprobe-executable-path"
+                      value={normalizedValues.ffprobeExecutablePath}
+                      onChange={(event) =>
+                        onChangeField("ffprobeExecutablePath", event.target.value)
+                      }
+                      placeholder="/opt/homebrew/bin/ffprobe"
+                      className="h-10"
+                    />
+                    <FieldDescription>
+                      用于读取视频时长，主要影响导入时的片头片尾裁剪。留空时会尝试系统默认路径。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <div className="flex flex-col gap-3 rounded-lg border border-border/70 p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">路径检测</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        检测当前填写的 `ffmpeg` / `ffprobe` 是否可以实际执行。
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={onCheckMediaTools}
+                      disabled={isCheckingMediaTools}
+                    >
+                      <RefreshCw
+                        className={isCheckingMediaTools ? "h-4 w-4 animate-spin" : "h-4 w-4"}
+                      />
+                      {isCheckingMediaTools ? "检测中..." : "检测工具路径"}
+                    </Button>
+                  </div>
+
+                  {mediaToolsCheckResult ? (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {[
+                        {
+                          key: "ffmpeg" as const,
+                          label: "ffmpeg",
+                          result: mediaToolsCheckResult.ffmpeg,
+                        },
+                        {
+                          key: "ffprobe" as const,
+                          label: "ffprobe",
+                          result: mediaToolsCheckResult.ffprobe,
+                        },
+                      ].map(({ key, label, result }) => (
+                        <div
+                          key={key}
+                          className={
+                            result.ok
+                              ? "rounded-lg border border-emerald-200 bg-emerald-50/80 p-3"
+                              : "rounded-lg border border-red-200 bg-red-50/80 p-3"
+                          }
+                        >
+                          <p className="text-sm font-medium text-foreground">
+                            {label} {result.ok ? "可用" : "不可用"}
+                          </p>
+                          <p className="mt-1 break-all text-xs text-muted-foreground">
+                            {result.resolvedPath ?? "未解析到可执行路径"}
+                          </p>
+                          <p className="mt-2 text-sm text-foreground">{result.message}</p>
+                          {result.version ? (
+                            <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                              {result.version}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </FieldGroup>
             </CardContent>

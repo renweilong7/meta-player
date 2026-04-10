@@ -7,6 +7,7 @@ import { PersistedAppSettings, PersistedMaterial } from "@/lib/persistence/types
 import { sceneShotAnalysisResponseFormat } from "@/lib/ai/structured-output";
 import { extractSubtitleBlocksInRange } from "@/lib/project-script/srt";
 import {
+  resolveFfmpegExecutable,
   resolveBundledPythonExecutable,
   resolveBundledPythonScriptPath,
 } from "@/lib/runtime/resource-paths";
@@ -170,14 +171,28 @@ ${buildSceneSubtitleReference(material, scene)}
 不要解释象征意义或人物真实意图，也不要简单复述剧情大纲。
 `.trim();
 
-const createSceneClipPath = (material: PersistedMaterial, scene: StoryOutlineSceneRecord) => {
+const getShotAnalysisFfmpegPath = (settings: PersistedAppSettings) => {
+  const resolvedPath = resolveFfmpegExecutable(settings.ffmpegExecutablePath);
+
+  if (!resolvedPath) {
+    throw new Error("未找到 ffmpeg。请先在设置页填写 ffmpeg 可执行文件路径。");
+  }
+
+  return resolvedPath;
+};
+
+const createSceneClipPath = (
+  material: PersistedMaterial,
+  scene: StoryOutlineSceneRecord,
+  settings: PersistedAppSettings
+) => {
   const tempDirectory = mkdtempSync(join(tmpdir(), "meta-player-shot-analysis-"));
   const outputPath = join(tempDirectory, "scene.mp4");
   const durationSeconds = getSceneDurationSeconds(scene);
 
   try {
     execFileSync(
-      "/opt/homebrew/bin/ffmpeg",
+      getShotAnalysisFfmpegPath(settings),
       [
         "-y",
         "-ss",
@@ -305,7 +320,7 @@ export const generateSceneShotAnalysis = async (input: {
   const baseUrl = settings.aiVisionBaseUrl.trim() || DEFAULT_VISION_BASE_URL;
   const model = settings.aiVisionModelName.trim() || DEFAULT_VISION_MODEL;
   const fps = clampVisionFps(settings.aiVisionFps);
-  const { outputPath, cleanup } = createSceneClipPath(material, scene);
+  const { outputPath, cleanup } = createSceneClipPath(material, scene, settings);
 
   try {
     const response = await callDashScopeVisionByPython({

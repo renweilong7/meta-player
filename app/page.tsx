@@ -28,6 +28,7 @@ import {
   fetchLocalEmbeddingModels,
   fetchAuthorizationSnapshot,
   refreshAuthorizationSnapshot,
+  validateMediaToolExecutables,
   importMaterials,
   indexMaterialOutline,
   combineProjectScriptItems,
@@ -46,6 +47,10 @@ import {
   removeMaterialMarker,
   removeProject,
 } from "@/lib/persistence/client";
+import {
+  installGlobalClientDiagnostics,
+  reportClientDiagnosticEvent,
+} from "@/lib/observability/client";
 import { AuthorizationSnapshot } from "@/lib/license/types";
 import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
 import {
@@ -71,6 +76,8 @@ import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 const defaultSettings: AppSettingsValues = {
   materialSavePath: "",
   defaultManagedImport: false,
+  ffmpegExecutablePath: "",
+  ffprobeExecutablePath: "",
   aiApiBaseUrl: "https://api.openai.com/v1",
   aiApiKey: "",
   aiModelName: "gpt-4o-mini",
@@ -175,6 +182,7 @@ type DesktopBridge = {
   chooseDirectory?: (defaultPath: string) => Promise<string | null>;
   saveFile?: (targetPath: string, bytes: Uint8Array) => Promise<string>;
   openPath?: (targetPath: string) => Promise<string>;
+  exportDiagnostics?: () => Promise<string>;
 };
 
 export default function VideoEditorPage() {
@@ -194,10 +202,26 @@ export default function VideoEditorPage() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isLoadingLocalEmbeddingModels, setIsLoadingLocalEmbeddingModels] =
     useState(false);
+  const [isCheckingMediaTools, setIsCheckingMediaTools] = useState(false);
+  const [mediaToolsCheckResult, setMediaToolsCheckResult] = useState<{
+    ffmpeg: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+    ffprobe: {
+      ok: boolean;
+      resolvedPath: string | null;
+      version: string | null;
+      message: string;
+    };
+  } | null>(null);
   const [localEmbeddingModels, setLocalEmbeddingModels] = useState<
     LocalEmbeddingModelOption[]
   >([]);
   const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
+  const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationSnapshot | null>(
     null
@@ -252,12 +276,19 @@ export default function VideoEditorPage() {
   const playerRef = useRef<VideoPlayerHandle>(null);
   const projectScriptPlaybackTimerRef = useRef<number | null>(null);
 
+  useEffect(() => installGlobalClientDiagnostics(), []);
+
   const refreshUsageSnapshot = async () => {
     try {
       setIsRefreshingUsage(true);
       const snapshot = await fetchAiUsageSnapshot();
       setUsageSnapshot(snapshot);
     } catch (error) {
+      void reportClientDiagnosticEvent({
+        level: "warn",
+        event: "usage.refresh_failed",
+        error,
+      });
       setLibraryError(
         error instanceof Error ? error.message : "读取 AI 用量统计失败。"
       );
@@ -438,6 +469,11 @@ export default function VideoEditorPage() {
 
         setLocalEmbeddingModels(models);
       } catch (error) {
+        void reportClientDiagnosticEvent({
+          level: "error",
+          event: "bootstrap.failed",
+          error,
+        });
         if (!isActive) {
           return;
         }
@@ -1571,6 +1607,10 @@ export default function VideoEditorPage() {
     field: K,
     value: AppSettingsValues[K]
   ) => {
+    if (field === "ffmpegExecutablePath" || field === "ffprobeExecutablePath") {
+      setMediaToolsCheckResult(null);
+    }
+
     setSettings((previous) => ({ ...previous, [field]: value }));
   };
 
@@ -1686,6 +1726,25 @@ export default function VideoEditorPage() {
     }
   };
 
+  const handleCheckMediaTools = async () => {
+    setLibraryError(null);
+    setIsCheckingMediaTools(true);
+
+    try {
+      const result = await validateMediaToolExecutables({
+        ffmpegExecutablePath: settings.ffmpegExecutablePath,
+        ffprobeExecutablePath: settings.ffprobeExecutablePath,
+      });
+      setMediaToolsCheckResult(result);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "检测媒体工具路径失败。"
+      );
+    } finally {
+      setIsCheckingMediaTools(false);
+    }
+  };
+
   const handleRefreshAuthorization = async () => {
     setIsRefreshingAuthorization(true);
     setLibraryError(null);
@@ -1699,6 +1758,46 @@ export default function VideoEditorPage() {
       );
     } finally {
       setIsRefreshingAuthorization(false);
+    }
+  };
+
+  const handleExportDiagnostics = async () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.exportDiagnostics) {
+      setLibraryError("当前桌面环境未启用诊断导出能力。");
+      return;
+    }
+
+    setIsExportingDiagnostics(true);
+    setLibraryError(null);
+
+    try {
+      const bundleDirectory = await desktopBridge.exportDiagnostics();
+      void reportClientDiagnosticEvent({
+        level: "info",
+        event: "diagnostics.exported",
+        details: {
+          bundleDirectory,
+        },
+      });
+
+      if (desktopBridge.openPath) {
+        await desktopBridge.openPath(bundleDirectory);
+      }
+    } catch (error) {
+      void reportClientDiagnosticEvent({
+        level: "error",
+        event: "diagnostics.export_failed",
+        error,
+      });
+      setLibraryError(
+        error instanceof Error ? error.message : "导出诊断包失败。"
+      );
+    } finally {
+      setIsExportingDiagnostics(false);
     }
   };
 
@@ -2032,10 +2131,13 @@ export default function VideoEditorPage() {
           values={settings}
           hasPendingChanges={hasPendingSettingsChanges}
           isSaving={isSavingSettings}
+          isCheckingMediaTools={isCheckingMediaTools}
+          mediaToolsCheckResult={mediaToolsCheckResult}
           localEmbeddingModels={localEmbeddingModels}
           isLoadingLocalEmbeddingModels={isLoadingLocalEmbeddingModels}
           onChangeField={handleSettingsFieldChange}
           onSave={handleSaveSettings}
+          onCheckMediaTools={handleCheckMediaTools}
           onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
           onBrowseLocalEmbeddingModelDirectory={
             handleBrowseLocalEmbeddingModelDirectory
@@ -2046,7 +2148,9 @@ export default function VideoEditorPage() {
         <UserPanel
           authorization={authorization}
           isRefreshingAuthorization={isRefreshingAuthorization}
+          isExportingDiagnostics={isExportingDiagnostics}
           onRefreshAuthorization={handleRefreshAuthorization}
+          onExportDiagnostics={handleExportDiagnostics}
         />
       ) : activeMenu === "usage" ? (
         <UsagePanel usage={usageSnapshot} isLoading={isRefreshingUsage} />

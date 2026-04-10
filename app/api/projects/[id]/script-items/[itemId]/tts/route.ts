@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
+import { withRouteLogging } from "@/lib/observability/api-route";
 import { startProjectScriptTtsGenerationForItem } from "@/lib/project-script-tts/service";
 import { getProjectById } from "@/lib/persistence/repository";
 
 export const runtime = "nodejs";
 
-export async function POST(
+const postHandler = async (
   _request: Request,
   context: { params: Promise<{ id: string; itemId: string }> }
-) {
+) => {
   const { id, itemId } = await context.params;
 
   const project = getProjectById(id);
@@ -22,4 +23,9 @@ export async function POST(
   }
 
   return NextResponse.json(updatedItem);
-}
+};
+
+export const POST = withRouteLogging(
+  { route: "/api/projects/[id]/script-items/[itemId]/tts" },
+  postHandler
+);
