@@ -95,6 +95,137 @@ const compilePythonScriptToBytecode = ({
   );
 };
 
+const removeDirectoryContents = (directoryPath) => {
+  if (!existsSync(directoryPath)) {
+    return;
+  }
+
+  rmSync(directoryPath, { recursive: true, force: true });
+};
+
+const shouldPruneDirectory = (entryName) =>
+  [
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".github",
+    "test",
+    "tests",
+    "__tests__",
+    "docs",
+    "doc",
+    "example",
+    "examples",
+    "benchmarks",
+    "include",
+    "share",
+    "man",
+  ].includes(entryName.toLowerCase());
+
+const shouldPruneFile = (entryName) => {
+  const normalizedEntryName = entryName.toLowerCase();
+
+  return (
+    normalizedEntryName.endsWith(".map") ||
+    normalizedEntryName.endsWith(".md") ||
+    normalizedEntryName.endsWith(".markdown") ||
+    normalizedEntryName.endsWith(".pyi") ||
+    normalizedEntryName === "license" ||
+    normalizedEntryName.startsWith("license.") ||
+    normalizedEntryName.startsWith("readme") ||
+    normalizedEntryName.startsWith("changelog") ||
+    normalizedEntryName.startsWith("news")
+  );
+};
+
+const pruneDirectoryTree = (rootPath, options = {}) => {
+  if (!existsSync(rootPath)) {
+    return;
+  }
+
+  const {
+    removeTopLevelPackages = [],
+    removeTopLevelPackagePrefixes = [],
+  } = options;
+  const normalizedPackageNames = new Set(removeTopLevelPackages.map((entry) => entry.toLowerCase()));
+  const normalizedPackagePrefixes = removeTopLevelPackagePrefixes.map((entry) => entry.toLowerCase());
+
+  const visit = (currentPath, depth = 0) => {
+    readdirSync(currentPath, { withFileTypes: true }).forEach((entry) => {
+      const entryPath = join(currentPath, entry.name);
+      const normalizedEntryName = entry.name.toLowerCase();
+
+      if (
+        depth === 0 &&
+        (normalizedPackageNames.has(normalizedEntryName) ||
+          normalizedPackagePrefixes.some((prefix) => normalizedEntryName.startsWith(prefix)))
+      ) {
+        removeDirectoryContents(entryPath);
+        return;
+      }
+
+      if (entry.isDirectory()) {
+        if (shouldPruneDirectory(entry.name)) {
+          removeDirectoryContents(entryPath);
+          return;
+        }
+
+        visit(entryPath, depth + 1);
+        return;
+      }
+
+      if (entry.isFile() && shouldPruneFile(entry.name)) {
+        rmSync(entryPath, { force: true });
+      }
+    });
+  };
+
+  visit(rootPath);
+};
+
+const prunePythonRuntime = (runtimeRootPath) => {
+  const sitePackagesRoot = join(
+    runtimeRootPath,
+    process.platform === "win32" ? "Lib" : "lib"
+  );
+
+  pruneDirectoryTree(runtimeRootPath);
+
+  if (!existsSync(sitePackagesRoot)) {
+    return;
+  }
+
+  const removePythonPackages = (candidateRootPath) => {
+    if (!existsSync(candidateRootPath)) {
+      return;
+    }
+
+    pruneDirectoryTree(candidateRootPath, {
+      removeTopLevelPackages: [
+        "pip",
+        "setuptools",
+        "wheel",
+        "ensurepip",
+        "pkg_resources",
+      ],
+      removeTopLevelPackagePrefixes: [
+        "pip-",
+        "setuptools-",
+        "wheel-",
+      ],
+    });
+  };
+
+  removePythonPackages(sitePackagesRoot);
+
+  readdirSync(sitePackagesRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("python"))
+    .forEach((entry) => {
+      removePythonPackages(join(sitePackagesRoot, entry.name, "site-packages"));
+    });
+};
+
 if (!existsSync(standaloneRoot)) {
   throw new Error("Missing .next/standalone. Run `next build` before packaging.");
 }
@@ -156,6 +287,7 @@ if (existsSync(sqliteVecRoot)) {
 cpSync(pythonRuntimeRoot, join(distRoot, "python"), {
   recursive: true,
 });
+prunePythonRuntime(join(distRoot, "python"));
 
 const sourcePackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 

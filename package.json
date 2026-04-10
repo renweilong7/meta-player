@@ -22,6 +22,7 @@
     "appId": "com.renyi.meta-player",
     "productName": "Meta Player",
     "asar": true,
+    "compression": "maximum",
     "electronDist": "node_modules/electron/dist",
     "icon": "build/icons/icon.png",
     "directories": {

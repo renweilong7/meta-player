@@ -7,8 +7,8 @@ interface UnauthorizedHomeProps {
   onOpenUserPage: () => void;
 }
 
-const adminQrUrl = process.env.NEXT_PUBLIC_LICENSE_ADMIN_QR_URL?.trim() ?? "";
-const adminContact = process.env.NEXT_PUBLIC_LICENSE_ADMIN_CONTACT?.trim() ?? "";
+const adminQrUrl =  "/MetaPlayer_QR.png";
+const adminContact = "MetaPlayer8";
 
 export function UnauthorizedHome({
   onOpenUserPage,
@@ -39,7 +39,7 @@ export function UnauthorizedHome({
               <p>状态：未授权</p>
               <p>可访问页面：首页、用户</p>
               <p>业务功能：已全部收起，等待管理员开通</p>
-              {adminContact ? <p>联系管理员：{adminContact}</p> : null}
+              {adminContact ? <p>管理员微信：{adminContact}</p> : null}
             </div>
           </div>
 
@@ -61,7 +61,7 @@ export function UnauthorizedHome({
           </div>
           {adminContact ? (
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              联系管理员：{adminContact}
+              管理员微信：{adminContact}
             </p>
           ) : null}
 
