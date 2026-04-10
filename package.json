@@ -8,10 +8,12 @@
     "generate:icons": "node scripts/generate-icons.mjs",
     "prepare:python-runtime": "node scripts/prepare-python-runtime.mjs",
     "build": "next build --webpack",
-    "package:app": "npm run prepare:python-runtime && npm run generate:icons && npm run build && node scripts/package-app.mjs",
+    "package:app": "node scripts/run-package-build.mjs --flavor cpu",
+    "package:app:gpu": "node scripts/run-package-build.mjs --flavor gpu",
     "dist:dir": "npm run package:app && node scripts/run-electron-builder.mjs --dir",
     "dist:mac": "npm run package:app && node scripts/run-electron-builder.mjs --mac dmg zip",
     "dist:win": "npm run package:app && node scripts/run-electron-builder.mjs --win nsis portable",
+    "dist:win:gpu": "npm run package:app:gpu && node scripts/run-electron-builder.mjs --flavor gpu --win nsis portable",
     "start": "next start",
     "lint": "eslint .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\""

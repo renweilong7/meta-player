@@ -386,6 +386,42 @@ const mapRowToAiUsageRecord = (row: AiUsageEventRow): PersistedAiUsageRecord => 
   createdAt: row.created_at,
 });
 
+const enrichAiUsageRecords = (records: PersistedAiUsageRecord[]): PersistedAiUsageRecord[] => {
+  const projects = listProjects();
+  const materials = listMaterials();
+
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const materialsById = new Map(materials.map((material) => [material.id, material]));
+
+  return records.map((record) => {
+    const sourceProject =
+      (record.projectId ? projectsById.get(record.projectId) : undefined) ??
+      (record.materialId
+        ? projects.find((project) => project.materialIds.includes(record.materialId!))
+        : undefined);
+    const sourceMaterial = record.materialId ? materialsById.get(record.materialId) : undefined;
+    const sourceScene = record.sceneId
+      ? sourceMaterial?.storyOutline?.find((scene) => scene.id === record.sceneId)
+      : undefined;
+
+    const sourceDetail = [
+      sourceProject ? `项目：${sourceProject.name}` : null,
+      sourceMaterial ? `素材：${sourceMaterial.title}` : null,
+      sourceScene ? `剧情：${sourceScene.title}` : null,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" / ");
+
+    return {
+      ...record,
+      sourceProjectName: sourceProject?.name ?? null,
+      sourceMaterialTitle: sourceMaterial?.title ?? null,
+      sourceSceneTitle: sourceScene?.title ?? null,
+      sourceDetail: sourceDetail || null,
+    };
+  });
+};
+
 const groupOutlineVectorRecordsByDimension = (records: OutlineVectorRecord[]) => {
   const groups = new Map<number, OutlineVectorRecord[]>();
 
@@ -1319,7 +1355,7 @@ export const getAiUsageSummary = (): PersistedAiUsageSummary => {
 
 export const getAiUsageSnapshot = (limit = 200): PersistedAiUsageSnapshot => ({
   summary: getAiUsageSummary(),
-  records: listAiUsageRecords(limit),
+  records: enrichAiUsageRecords(listAiUsageRecords(limit)),
 });
 
 export const listMaterialsByProjectId = (projectId: string): PersistedMaterial[] => {

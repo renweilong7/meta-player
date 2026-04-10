@@ -9,7 +9,10 @@ const projectRoot = resolve(__dirname, "..");
 const pythonRuntimeRoot = resolve(
   process.env.META_PLAYER_PYTHON_RUNTIME_PATH?.trim() || join(projectRoot, ".python-runtime")
 );
-const requirementsPath = join(projectRoot, "requirements-local-embedding.txt");
+const requirementsPath = resolve(
+  process.env.META_PLAYER_PYTHON_REQUIREMENTS_PATH?.trim() ||
+    join(projectRoot, "requirements-local-embedding.txt")
+);
 
 const getPythonBootstrapCommand = () => {
   if (process.platform === "win32") {
@@ -57,6 +60,6 @@ if (!existsSync(runtimeExecutablePath)) {
   throw new Error(`Embedded Python runtime is missing executable: ${runtimeExecutablePath}`);
 }
 
-console.log(`Installing Python dependencies into ${pythonRuntimeRoot}`);
+console.log(`Installing Python dependencies from ${requirementsPath} into ${pythonRuntimeRoot}`);
 runOrThrow(runtimeExecutablePath, getPipInstallArgs());
 console.log(`Embedded Python runtime ready at ${pythonRuntimeRoot}`);

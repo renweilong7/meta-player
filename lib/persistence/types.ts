@@ -40,6 +40,10 @@ export interface PersistedAiUsageRecord {
   projectId: string | null;
   materialId: string | null;
   sceneId: string | null;
+  sourceProjectName?: string | null;
+  sourceMaterialTitle?: string | null;
+  sourceSceneTitle?: string | null;
+  sourceDetail?: string | null;
   metadata?: Record<string, string | number | boolean | null>;
   createdAt: string;
 }

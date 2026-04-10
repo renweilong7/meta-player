@@ -76,6 +76,11 @@ const formatErrorMessage = (value: string | null) => {
   return normalizedValue ? normalizedValue : "-";
 };
 
+const formatSourceLabel = (value: string | null | undefined) => {
+  const normalizedValue = value?.trim();
+  return normalizedValue ? normalizedValue : "-";
+};
+
 const summaryItems = (snapshot: PersistedAiUsageSnapshot) => [
   {
     label: "总调用次数",
@@ -245,12 +250,16 @@ export function UsagePanel({
                         <TableHead>时间</TableHead>
                         <TableHead>动作</TableHead>
                         <TableHead>来源</TableHead>
+                        <TableHead>来源项目</TableHead>
+                        <TableHead>来源素材</TableHead>
+                        <TableHead>来源剧情</TableHead>
                         <TableHead>模型</TableHead>
                         <TableHead>输入</TableHead>
                         <TableHead>输出</TableHead>
                         <TableHead>总量</TableHead>
                         <TableHead>状态</TableHead>
                         <TableHead>失败原因</TableHead>
+                        <TableHead>来源详情</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -259,6 +268,15 @@ export function UsagePanel({
                           <TableCell>{formatDateTime(record.createdAt)}</TableCell>
                           <TableCell>{actionLabels[record.action]}</TableCell>
                           <TableCell>{providerLabels[record.provider]}</TableCell>
+                          <TableCell className="max-w-[180px] truncate">
+                            {formatSourceLabel(record.sourceProjectName)}
+                          </TableCell>
+                          <TableCell className="max-w-[180px] truncate">
+                            {formatSourceLabel(record.sourceMaterialTitle)}
+                          </TableCell>
+                          <TableCell className="max-w-[200px] truncate">
+                            {formatSourceLabel(record.sourceSceneTitle)}
+                          </TableCell>
                           <TableCell className="max-w-[260px] truncate">{record.model}</TableCell>
                           <TableCell>{formatNumber(record.inputTokens)}</TableCell>
                           <TableCell>{formatNumber(record.outputTokens)}</TableCell>
@@ -279,6 +297,12 @@ export function UsagePanel({
                             {record.status === "error"
                               ? formatErrorMessage(record.errorMessage)
                               : "-"}
+                          </TableCell>
+                          <TableCell
+                            className="max-w-[320px] whitespace-normal break-words text-xs text-muted-foreground"
+                            title={formatSourceLabel(record.sourceDetail)}
+                          >
+                            {formatSourceLabel(record.sourceDetail)}
                           </TableCell>
                         </TableRow>
                       ))}

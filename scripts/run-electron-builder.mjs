@@ -12,6 +12,14 @@ const electronBuilderEntrypoint = join(
   "electron-builder",
   "cli.js"
 );
+const rawArguments = process.argv.slice(2);
+const flavorIndex = rawArguments.indexOf("--flavor");
+const buildFlavor =
+  flavorIndex >= 0 && rawArguments[flavorIndex + 1] ? rawArguments[flavorIndex + 1] : "cpu";
+const builderArguments =
+  flavorIndex >= 0
+    ? rawArguments.filter((_, index) => index !== flavorIndex && index !== flavorIndex + 1)
+    : rawArguments;
 
 const builderEnvironment = {
   ...process.env,
@@ -23,9 +31,22 @@ if (process.platform !== "win32") {
     process.env.ELECTRON_BUILDER_CACHE || "/tmp/electron-builder-cache";
 }
 
+if (buildFlavor === "gpu") {
+  builderEnvironment.META_PLAYER_BUILD_FLAVOR = "gpu";
+}
+
+const builderConfigArguments =
+  buildFlavor === "gpu"
+    ? [
+        "-c.productName=Meta Player GPU",
+        "-c.appId=com.renyi.meta-player.gpu",
+        "-c.directories.output=release-gpu",
+      ]
+    : [];
+
 const result = spawnSync(
   process.execPath,
-  [electronBuilderEntrypoint, ...process.argv.slice(2)],
+  [electronBuilderEntrypoint, ...builderArguments, ...builderConfigArguments],
   {
     cwd: projectRoot,
     env: builderEnvironment,
