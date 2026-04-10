@@ -10,8 +10,6 @@ const flavorIndex = rawArguments.indexOf("--flavor");
 const buildFlavor =
   flavorIndex >= 0 && rawArguments[flavorIndex + 1] ? rawArguments[flavorIndex + 1] : "cpu";
 
-const getNpmCommand = () => (process.platform === "win32" ? "npm.cmd" : "npm");
-
 const buildEnvironment = {
   ...process.env,
 };
@@ -25,11 +23,12 @@ if (buildFlavor === "gpu") {
   );
 }
 
-const runOrThrow = (command, args) => {
+const runOrThrow = (command, args, options = {}) => {
   const result = spawnSync(command, args, {
     cwd: projectRoot,
     env: buildEnvironment,
     stdio: "inherit",
+    ...options,
   });
 
   if (result.status === 0) {
@@ -43,7 +42,16 @@ const runOrThrow = (command, args) => {
   throw new Error(`${command} ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}.`);
 };
 
+const runNpmScriptOrThrow = (scriptName) => {
+  if (process.platform === "win32") {
+    runOrThrow("cmd.exe", ["/d", "/s", "/c", "npm", "run", scriptName]);
+    return;
+  }
+
+  runOrThrow("npm", ["run", scriptName]);
+};
+
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "prepare-python-runtime.mjs")]);
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "generate-icons.mjs")]);
-runOrThrow(getNpmCommand(), ["run", "build"]);
+runNpmScriptOrThrow("build");
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "package-app.mjs")]);
