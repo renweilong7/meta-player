@@ -13,6 +13,12 @@ const buildFlavor =
 const buildEnvironment = {
   ...process.env,
 };
+const buildNodeOptions = [
+  process.env.NODE_OPTIONS?.trim(),
+  "--max-old-space-size=8192",
+]
+  .filter((entry) => entry && entry.length > 0)
+  .join(" ");
 
 if (buildFlavor === "gpu") {
   buildEnvironment.META_PLAYER_PYTHON_FLAVOR = "gpu";
@@ -44,11 +50,25 @@ const runOrThrow = (command, args, options = {}) => {
 
 const runNpmScriptOrThrow = (scriptName) => {
   if (process.platform === "win32") {
-    runOrThrow("cmd.exe", ["/d", "/s", "/c", "npm", "run", scriptName]);
+    runOrThrow(
+      "cmd.exe",
+      ["/d", "/s", "/c", "npm", "run", scriptName],
+      {
+        env: {
+          ...buildEnvironment,
+          NODE_OPTIONS: buildNodeOptions,
+        },
+      }
+    );
     return;
   }
 
-  runOrThrow("npm", ["run", scriptName]);
+  runOrThrow("npm", ["run", scriptName], {
+    env: {
+      ...buildEnvironment,
+      NODE_OPTIONS: buildNodeOptions,
+    },
+  });
 };
 
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "prepare-python-runtime.mjs")]);
