@@ -41,10 +41,12 @@ const builderConfigArguments =
         "-c.productName=Meta Player GPU",
         "-c.appId=com.renyi.meta-player.gpu",
         "-c.directories.output=release-gpu",
-        "-c.artifactName=Meta-Player-gpu-${version}-${arch}-${target}.${ext}",
+        "-c.nsis.artifactName=Meta-Player-gpu-${version}-${arch}-setup.${ext}",
+        "-c.portable.artifactName=Meta-Player-gpu-${version}-${arch}-portable.${ext}",
       ]
     : [
-        "-c.artifactName=Meta-Player-cpu-${version}-${arch}-${target}.${ext}",
+        "-c.nsis.artifactName=Meta-Player-cpu-${version}-${arch}-setup.${ext}",
+        "-c.portable.artifactName=Meta-Player-cpu-${version}-${arch}-portable.${ext}",
       ];
 
 const result = spawnSync(

@@ -218,6 +218,7 @@ const prunePythonRuntime = (runtimeRootPath) => {
   };
 
   removePythonPackages(sitePackagesRoot);
+  removePythonPackages(join(sitePackagesRoot, "site-packages"));
 
   readdirSync(sitePackagesRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("python"))
