@@ -1,4 +1,5 @@
 import { PersistedAppSettings } from "@/lib/persistence/types";
+import { storySearchResponseFormat } from "@/lib/ai/structured-output";
 import { StoryOutlineSearchResult, StoryOutlineSearchSegment } from "@/lib/story-outline/search";
 import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
 import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
@@ -33,18 +34,26 @@ interface LlmSearchResultDraft {
   score?: unknown;
 }
 
+interface LlmSearchWrappedPayload {
+  results?: unknown;
+  items?: unknown;
+  data?: unknown;
+  matches?: unknown;
+}
+
 const LLM_STORY_SEARCH_SYSTEM_PROMPT = `
 你是一个视频剧情检索助手。
 
 你的任务是：
 1. 根据用户查询，从候选剧情片段中找出最匹配的片段。
 2. 你只能从给定候选里选择，不能编造新的片段。
-3. 返回严格 JSON 数组，不要返回 markdown，不要返回解释，不要返回代码块。
-4. 每个数组元素必须包含：
+3. 返回严格 JSON 对象，不要返回 markdown，不要返回解释，不要返回代码块。
+4. JSON 对象必须包含 "results" 字段，且它是数组。
+5. 每个数组元素必须包含：
    - "segmentId": 候选片段的唯一 ID
    - "score": 0 到 1 之间的小数，表示相关度，越高越相关
-5. 结果必须按相关度降序排列。
-6. 最多返回 10 条结果。
+6. results 结果必须按相关度降序排列。
+7. 最多返回 10 条结果。
 `;
 
 const buildStorySearchUserPrompt = (
@@ -68,7 +77,7 @@ ${JSON.stringify(
   2
 )}
 
-请只返回 JSON 数组。
+请只返回形如 {"results":[...]} 的 JSON 对象。
 `;
 
 const getAssistantText = (payload: OpenAiChatCompletionResponse): string => {
@@ -102,28 +111,115 @@ const tryParseJsonArray = (raw: string): LlmSearchResultDraft[] | null => {
   }
 };
 
+const tryParseWrappedJsonArray = (raw: string): LlmSearchResultDraft[] | null => {
+  try {
+    const parsed = JSON.parse(raw) as LlmSearchWrappedPayload;
+    const arrayCandidate = [parsed.results, parsed.items, parsed.data, parsed.matches].find(
+      (value) => Array.isArray(value)
+    );
+
+    return Array.isArray(arrayCandidate) ? (arrayCandidate as LlmSearchResultDraft[]) : null;
+  } catch {
+    return null;
+  }
+};
+
+const getBalancedJsonSlice = (
+  rawContent: string,
+  openingBracket: "[" | "{",
+  closingBracket: "]" | "}"
+) => {
+  const startIndex = rawContent.indexOf(openingBracket);
+  if (startIndex < 0) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = startIndex; index < rawContent.length; index += 1) {
+    const character = rawContent[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (character === "\\") {
+        escaped = true;
+        continue;
+      }
+
+      if (character === "\"") {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (character === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (character === openingBracket) {
+      depth += 1;
+      continue;
+    }
+
+    if (character === closingBracket) {
+      depth -= 1;
+
+      if (depth === 0) {
+        return rawContent.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+};
+
 const parseSearchResultDrafts = (rawContent: string): LlmSearchResultDraft[] => {
-  const normalizedContent = rawContent.trim();
+  const normalizedContent = rawContent.trim().replace(/^json\s*/i, "");
   const directParse = tryParseJsonArray(normalizedContent);
   if (directParse) {
     return directParse;
   }
 
+  const wrappedDirectParse = tryParseWrappedJsonArray(normalizedContent);
+  if (wrappedDirectParse) {
+    return wrappedDirectParse;
+  }
+
   const codeBlockMatch = normalizedContent.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (codeBlockMatch?.[1]) {
-    const parsedFromCodeBlock = tryParseJsonArray(codeBlockMatch[1].trim());
+    const codeBlockContent = codeBlockMatch[1].trim().replace(/^json\s*/i, "");
+    const parsedFromCodeBlock = tryParseJsonArray(codeBlockContent);
     if (parsedFromCodeBlock) {
       return parsedFromCodeBlock;
     }
+
+    const parsedWrappedCodeBlock = tryParseWrappedJsonArray(codeBlockContent);
+    if (parsedWrappedCodeBlock) {
+      return parsedWrappedCodeBlock;
+    }
   }
 
-  const firstBracketIndex = normalizedContent.indexOf("[");
-  const lastBracketIndex = normalizedContent.lastIndexOf("]");
-  if (firstBracketIndex >= 0 && lastBracketIndex > firstBracketIndex) {
-    const slicedJson = normalizedContent.slice(firstBracketIndex, lastBracketIndex + 1);
-    const parsedFromSlice = tryParseJsonArray(slicedJson);
+  const slicedJsonArray = getBalancedJsonSlice(normalizedContent, "[", "]");
+  if (slicedJsonArray) {
+    const parsedFromSlice = tryParseJsonArray(slicedJsonArray);
     if (parsedFromSlice) {
       return parsedFromSlice;
+    }
+  }
+
+  const slicedJsonObject = getBalancedJsonSlice(normalizedContent, "{", "}");
+  if (slicedJsonObject) {
+    const parsedWrappedSlice = tryParseWrappedJsonArray(slicedJsonObject);
+    if (parsedWrappedSlice) {
+      return parsedWrappedSlice;
     }
   }
 
@@ -217,6 +313,7 @@ export const rankStorySegmentsWithLlm = async (input: {
         input.settings.aiModelName ||
         DEFAULT_SEARCH_MODEL,
       temperature: 0,
+      response_format: storySearchResponseFormat,
       messages: buildMessages(input.query, candidates),
     }),
   });

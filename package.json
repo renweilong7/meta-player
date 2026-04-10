@@ -9,9 +9,9 @@
     "prepare:python-runtime": "node scripts/prepare-python-runtime.mjs",
     "build": "next build --webpack",
     "package:app": "npm run prepare:python-runtime && npm run generate:icons && npm run build && node scripts/package-app.mjs",
-    "dist:dir": "npm run package:app && ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --dir",
-    "dist:mac": "npm run package:app && ELECTRON_BUILDER_CACHE=/tmp/electron-builder-cache ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --mac dmg zip",
-    "dist:win": "npm run package:app && ELECTRON_OVERRIDE_DIST_PATH=node_modules/electron/dist electron-builder --win nsis portable",
+    "dist:dir": "npm run package:app && node scripts/run-electron-builder.mjs --dir",
+    "dist:mac": "npm run package:app && node scripts/run-electron-builder.mjs --mac dmg zip",
+    "dist:win": "npm run package:app && node scripts/run-electron-builder.mjs --win nsis portable",
     "start": "next start",
     "lint": "eslint .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\""

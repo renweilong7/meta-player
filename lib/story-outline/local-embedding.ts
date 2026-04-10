@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import {
   LocalEmbeddingModelOption,
   PersistedAppSettings,
@@ -11,6 +11,45 @@ import {
   resolveBundledPythonExecutable,
   resolveBundledPythonScriptPath,
 } from "@/lib/runtime/resource-paths";
+
+const activeLocalEmbeddingProcesses = new Set<ChildProcessWithoutNullStreams>();
+
+let hasInstalledLocalEmbeddingShutdownHandlers = false;
+
+const terminateTrackedLocalEmbeddingProcesses = (signal: NodeJS.Signals) => {
+  activeLocalEmbeddingProcesses.forEach((child) => {
+    if (child.killed) {
+      return;
+    }
+
+    try {
+      child.kill(signal);
+    } catch {
+      // Ignore cleanup errors during shutdown.
+    }
+  });
+};
+
+const ensureLocalEmbeddingShutdownHandlers = () => {
+  if (hasInstalledLocalEmbeddingShutdownHandlers) {
+    return;
+  }
+
+  hasInstalledLocalEmbeddingShutdownHandlers = true;
+
+  process.once("beforeExit", () => {
+    terminateTrackedLocalEmbeddingProcesses("SIGTERM");
+  });
+  process.once("exit", () => {
+    terminateTrackedLocalEmbeddingProcesses("SIGKILL");
+  });
+  process.once("SIGINT", () => {
+    terminateTrackedLocalEmbeddingProcesses("SIGTERM");
+  });
+  process.once("SIGTERM", () => {
+    terminateTrackedLocalEmbeddingProcesses("SIGTERM");
+  });
+};
 
 const isValidModelDirectory = (absolutePath: string) => {
   if (!existsSync(absolutePath) || !statSync(absolutePath).isDirectory()) {
@@ -123,6 +162,8 @@ export const generateLocalEmbeddings = async (
   const pythonExecutable = resolveBundledPythonExecutable();
   const action = context?.action ?? "story_outline_embedding_index";
 
+  ensureLocalEmbeddingShutdownHandlers();
+
   if (!scriptPath) {
     throw new Error("未找到本地 Embedding Python 脚本，请重新打包应用。");
   }
@@ -135,9 +176,20 @@ export const generateLocalEmbeddings = async (
     const child = spawn(pythonExecutable, [scriptPath], {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    activeLocalEmbeddingProcesses.add(child);
 
     let stdout = "";
     let stderr = "";
+    let handled = false;
+
+    const finishWithError = (error: Error) => {
+      if (handled) {
+        return;
+      }
+
+      handled = true;
+      reject(error);
+    };
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
@@ -148,6 +200,7 @@ export const generateLocalEmbeddings = async (
     });
 
     child.on("error", (error) => {
+      activeLocalEmbeddingProcesses.delete(child);
       safeRecordAiUsageEvent({
         action,
         provider: "local_embedding",
@@ -159,10 +212,16 @@ export const generateLocalEmbeddings = async (
         projectId: context?.projectId,
         materialId: context?.materialId,
       });
-      reject(error);
+      finishWithError(error);
     });
 
     child.on("close", (code) => {
+      activeLocalEmbeddingProcesses.delete(child);
+
+      if (handled) {
+        return;
+      }
+
       if (code !== 0) {
         safeRecordAiUsageEvent({
           action,
@@ -175,7 +234,7 @@ export const generateLocalEmbeddings = async (
           projectId: context?.projectId,
           materialId: context?.materialId,
         });
-        reject(new Error(stderr.trim() || "本地 Embedding Python 服务执行失败。"));
+        finishWithError(new Error(stderr.trim() || "本地 Embedding Python 服务执行失败。"));
         return;
       }
 
@@ -205,7 +264,7 @@ export const generateLocalEmbeddings = async (
             projectId: context?.projectId,
             materialId: context?.materialId,
           });
-          reject(new Error("本地 Embedding 模型返回的向量格式无效。"));
+          finishWithError(new Error("本地 Embedding 模型返回的向量格式无效。"));
           return;
         }
 
@@ -224,6 +283,7 @@ export const generateLocalEmbeddings = async (
               typeof payload.dimension === "number" ? payload.dimension : embeddings[0]?.length ?? 0,
           },
         });
+        handled = true;
         resolve(embeddings);
       } catch (error) {
         safeRecordAiUsageEvent({
@@ -238,7 +298,7 @@ export const generateLocalEmbeddings = async (
           projectId: context?.projectId,
           materialId: context?.materialId,
         });
-        reject(error);
+        finishWithError(error instanceof Error ? error : new Error(String(error)));
       }
     });
 

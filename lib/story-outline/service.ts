@@ -8,6 +8,7 @@ import {
   STORY_OUTLINE_SYSTEM_PROMPT,
   buildStoryOutlineUserPrompt,
 } from "@/lib/story-outline/prompt";
+import { storyOutlineResponseFormat } from "@/lib/ai/structured-output";
 import { postAiUsageRecord } from "@/lib/persistence/client";
 import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
 
@@ -41,6 +42,10 @@ interface StoryOutlineSceneDraft {
   endTimecode?: unknown;
   startSeconds?: unknown;
   endSeconds?: unknown;
+}
+
+interface StoryOutlineWrappedPayload {
+  scenes?: unknown;
 }
 
 /**
@@ -86,6 +91,7 @@ export const generateStoryOutline = async (
     body: JSON.stringify({
       model,
       temperature: 0.2,
+      response_format: storyOutlineResponseFormat,
       messages: buildMessages(input),
     }),
   });
@@ -201,7 +207,7 @@ const getAssistantText = (payload: OpenAiChatCompletionResponse): string => {
 };
 
 /**
- * 从 AI 文本中提取第一个 JSON 数组。
+ * 从 AI 文本中提取剧情场景数组。
  *
  * 虽然提示词要求只返回 JSON，但实际兼容接口时仍然要兜底，
  * 否则模型一旦包裹 ```json 代码块就会直接导致流程失败。
@@ -213,11 +219,22 @@ const parseSceneDrafts = (rawContent: string): StoryOutlineSceneDraft[] => {
     return directParse;
   }
 
+  const wrappedDirectParse = tryParseWrappedScenes(normalizedContent);
+  if (wrappedDirectParse) {
+    return wrappedDirectParse;
+  }
+
   const codeBlockMatch = normalizedContent.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (codeBlockMatch?.[1]) {
-    const parsedFromCodeBlock = tryParseJsonArray(codeBlockMatch[1].trim());
+    const codeBlockContent = codeBlockMatch[1].trim();
+    const parsedFromCodeBlock = tryParseJsonArray(codeBlockContent);
     if (parsedFromCodeBlock) {
       return parsedFromCodeBlock;
+    }
+
+    const parsedWrappedCodeBlock = tryParseWrappedScenes(codeBlockContent);
+    if (parsedWrappedCodeBlock) {
+      return parsedWrappedCodeBlock;
     }
   }
 
@@ -231,6 +248,16 @@ const parseSceneDrafts = (rawContent: string): StoryOutlineSceneDraft[] => {
     }
   }
 
+  const firstBraceIndex = normalizedContent.indexOf("{");
+  const lastBraceIndex = normalizedContent.lastIndexOf("}");
+  if (firstBraceIndex >= 0 && lastBraceIndex > firstBraceIndex) {
+    const slicedJson = normalizedContent.slice(firstBraceIndex, lastBraceIndex + 1);
+    const parsedWrappedSlice = tryParseWrappedScenes(slicedJson);
+    if (parsedWrappedSlice) {
+      return parsedWrappedSlice;
+    }
+  }
+
   throw new Error("AI 返回内容不是合法的 JSON 数组");
 };
 
@@ -238,6 +265,15 @@ const tryParseJsonArray = (raw: string): StoryOutlineSceneDraft[] | null => {
   try {
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as StoryOutlineSceneDraft[]) : null;
+  } catch {
+    return null;
+  }
+};
+
+const tryParseWrappedScenes = (raw: string): StoryOutlineSceneDraft[] | null => {
+  try {
+    const parsed = JSON.parse(raw) as StoryOutlineWrappedPayload;
+    return Array.isArray(parsed.scenes) ? (parsed.scenes as StoryOutlineSceneDraft[]) : null;
   } catch {
     return null;
   }

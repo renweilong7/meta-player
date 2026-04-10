@@ -22,6 +22,7 @@ def main() -> None:
     video_path = str(payload.get("videoPath", "")).strip()
     prompt = str(payload.get("prompt", "")).strip()
     fps = payload.get("fps")
+    response_format = payload.get("responseFormat")
 
     if not base_url:
         fail("missing baseUrl")
@@ -35,6 +36,8 @@ def main() -> None:
         fail("missing prompt")
     if not isinstance(fps, (int, float)):
         fail("fps must be a number")
+    if not isinstance(response_format, dict):
+        fail("responseFormat must be an object")
 
     try:
         import dashscope
@@ -65,6 +68,7 @@ def main() -> None:
             api_key=api_key,
             model=model,
             messages=messages,
+            response_format=response_format,
         )
     except Exception as error:  # noqa: BLE001
         fail(str(error))

@@ -71,6 +71,11 @@ const formatDateTime = (value: string) =>
     second: "2-digit",
   }).format(new Date(value));
 
+const formatErrorMessage = (value: string | null) => {
+  const normalizedValue = value?.trim();
+  return normalizedValue ? normalizedValue : "-";
+};
+
 const summaryItems = (snapshot: PersistedAiUsageSnapshot) => [
   {
     label: "总调用次数",
@@ -245,6 +250,7 @@ export function UsagePanel({
                         <TableHead>输出</TableHead>
                         <TableHead>总量</TableHead>
                         <TableHead>状态</TableHead>
+                        <TableHead>失败原因</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -265,6 +271,14 @@ export function UsagePanel({
                             >
                               {record.status === "success" ? "成功" : "失败"}
                             </Badge>
+                          </TableCell>
+                          <TableCell
+                            className="max-w-[360px] whitespace-normal break-words text-xs text-muted-foreground"
+                            title={record.status === "error" ? formatErrorMessage(record.errorMessage) : ""}
+                          >
+                            {record.status === "error"
+                              ? formatErrorMessage(record.errorMessage)
+                              : "-"}
                           </TableCell>
                         </TableRow>
                       ))}

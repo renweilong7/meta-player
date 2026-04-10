@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PersistedAppSettings, PersistedMaterial } from "@/lib/persistence/types";
+import { sceneShotAnalysisResponseFormat } from "@/lib/ai/structured-output";
 import { extractSubtitleBlocksInRange } from "@/lib/project-script/srt";
 import {
   resolveBundledPythonExecutable,
@@ -224,6 +225,7 @@ const callDashScopeVisionByPython = async (input: {
   fps: number;
   videoPath: string;
   prompt: string;
+  responseFormat: typeof sceneShotAnalysisResponseFormat;
 }): Promise<PythonShotAnalysisPayload> => {
   const scriptPath = resolveBundledPythonScriptPath("vision_shot_analysis");
   const pythonExecutable = resolveBundledPythonExecutable();
@@ -313,6 +315,7 @@ export const generateSceneShotAnalysis = async (input: {
       fps,
       videoPath: outputPath,
       prompt: `${SHOT_ANALYSIS_SYSTEM_PROMPT}\n\n${buildUserPrompt(material, scene)}`,
+      responseFormat: sceneShotAnalysisResponseFormat,
     });
     const normalized = normalizeShotAnalysis(parseShotAnalysisDraft(response.content ?? ""));
     const tokenUsage = extractOpenAiTokenUsage({
