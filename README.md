@@ -176,24 +176,42 @@ META_PLAYER_SQLITE_VEC_PATH=/absolute/path/to/vec0.dylib npm run electron:dev
 npm run package:app
 ```
 
+如需构建 Windows NVIDIA GPU 版的本地 Embedding 运行环境，可执行：
+
+```bash
+npm run package:app:gpu
+```
+
 ## 打包
 
 ### Windows
 
-类 Unix 环境可直接执行：
+当前 Windows 打包脚本已经做了跨平台收口。请先确保本机满足：
+
+- 已安装 Node.js
+- 已安装 Python 3，且 `py -3` 可用
+- 若打 GPU 包，目标机器需面向 NVIDIA CUDA 12.4 环境
+
+CPU 版安装包：
 
 ```bash
+npm install
 npm run dist:win
 ```
 
-如果在 Windows PowerShell 下执行，建议使用：
+GPU 版安装包：
 
-```powershell
+```bash
 npm install
-npm run package:app
-$env:ELECTRON_OVERRIDE_DIST_PATH="node_modules/electron/dist"
-npx electron-builder --win nsis portable
+npm run dist:win:gpu
 ```
+
+说明：
+
+- `dist:win` 会自动准备 CPU 版 Python runtime、构建前端、整理产物并生成 Windows 安装包
+- `dist:win:gpu` 会使用独立的 GPU Python runtime，并生成单独的 GPU 安装包
+- GPU 包当前面向 Windows NVIDIA CUDA 12.4，不适合通用发给所有 Windows 用户
+- CPU 与 GPU 包会分别输出到不同目录，避免相互覆盖
 
 ### macOS
 
@@ -209,11 +227,11 @@ npm run dist:mac
 - 禁用 DevTools
 - 拦截常见调试快捷键
 - 屏蔽右键上下文菜单
-- 禁止页面打开新窗口
+- 页面外链优先交给系统默认浏览器打开
 - 生产环境关闭 `nodeIntegration`，开启 `contextIsolation`
 
 打包时会把 `bin/sqlite-vec/` 对应平台的动态库、内置 Python 运行环境和 Python 脚本一起带入应用产物。
-打包命令会先执行 `npm run prepare:python-runtime`，在项目根目录生成 `.python-runtime/`，再把它打进安装包。
+CPU 打包会生成 `.python-runtime/`，GPU 打包会生成 `.python-runtime-gpu/`，随后再把对应运行时打进安装包。
 
 ## 目录结构
 

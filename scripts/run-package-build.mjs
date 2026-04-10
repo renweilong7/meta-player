@@ -17,6 +17,7 @@ const buildEnvironment = {
 };
 
 if (buildFlavor === "gpu") {
+  buildEnvironment.META_PLAYER_PYTHON_FLAVOR = "gpu";
   buildEnvironment.META_PLAYER_PYTHON_RUNTIME_PATH = join(projectRoot, ".python-runtime-gpu");
   buildEnvironment.META_PLAYER_PYTHON_REQUIREMENTS_PATH = join(
     projectRoot,

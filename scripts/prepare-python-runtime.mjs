@@ -13,6 +13,8 @@ const requirementsPath = resolve(
   process.env.META_PLAYER_PYTHON_REQUIREMENTS_PATH?.trim() ||
     join(projectRoot, "requirements-local-embedding.txt")
 );
+const pythonFlavor = process.env.META_PLAYER_PYTHON_FLAVOR?.trim().toLowerCase() || "cpu";
+const gpuTorchVersion = process.env.META_PLAYER_GPU_TORCH_VERSION?.trim() || "2.5.1+cu124";
 
 const getPythonBootstrapCommand = () => {
   if (process.platform === "win32") {
@@ -31,6 +33,17 @@ const getPipInstallArgs = () =>
   process.platform === "win32"
     ? ["-m", "pip", "install", "-r", requirementsPath]
     : ["-m", "pip", "install", "-r", requirementsPath];
+
+const getGpuTorchInstallArgs = () => [
+  "-m",
+  "pip",
+  "install",
+  "--upgrade",
+  "--force-reinstall",
+  "--index-url",
+  "https://download.pytorch.org/whl/cu124",
+  `torch==${gpuTorchVersion}`,
+];
 
 const runOrThrow = (command, args) => {
   const result = spawnSync(command, args, {
@@ -58,6 +71,13 @@ if (!existsSync(pythonRuntimeRoot)) {
 const runtimeExecutablePath = getRuntimeExecutablePath();
 if (!existsSync(runtimeExecutablePath)) {
   throw new Error(`Embedded Python runtime is missing executable: ${runtimeExecutablePath}`);
+}
+
+if (pythonFlavor === "gpu") {
+  console.log(
+    `Installing CUDA torch ${gpuTorchVersion} into ${pythonRuntimeRoot}`
+  );
+  runOrThrow(runtimeExecutablePath, getGpuTorchInstallArgs());
 }
 
 console.log(`Installing Python dependencies from ${requirementsPath} into ${pythonRuntimeRoot}`);
