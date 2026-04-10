@@ -144,9 +144,15 @@ const applyProductionWindowHardening = (mainWindow) => {
   mainWindow.webContents.on("context-menu", (event) => {
     event.preventDefault();
   });
-  mainWindow.webContents.setWindowOpenHandler(() => ({
-    action: "deny",
-  }));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) {
+      void shell.openExternal(url);
+    }
+
+    return {
+      action: "deny",
+    };
+  });
 };
 
 const createWindow = async () => {
@@ -155,8 +161,8 @@ const createWindow = async () => {
     width: 1280,
     height: 800,
     webPreferences: {
-      nodeIntegration: isDev,
-      contextIsolation: !isDev,
+      nodeIntegration: false,
+      contextIsolation: true,
       devTools: isDev,
       preload: path.join(__dirname, "preload.js"),
     },
@@ -224,6 +230,14 @@ app.whenReady().then(() => {
     }
 
     return shell.showItemInFolder(targetPath);
+  });
+
+  ipcMain.handle("meta-player:open-external", async (_event, targetUrl) => {
+    if (typeof targetUrl !== "string" || !targetUrl.trim()) {
+      throw new Error("缺少外部链接。");
+    }
+
+    return shell.openExternal(targetUrl);
   });
 
   ipcMain.handle("meta-player:save-file", async (_event, targetPath, bytes) => {

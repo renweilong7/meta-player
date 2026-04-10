@@ -7,6 +7,7 @@ import {
   User,
   Settings,
   ChartColumn,
+  LifeBuoy,
 } from "lucide-react";
 import {
   Tooltip,
@@ -20,6 +21,14 @@ interface SidebarMenuProps {
   onMenuChange: (menu: string) => void;
   visibleMenuIds?: string[];
 }
+
+type DesktopBridge = {
+  openExternal?: (targetUrl: string) => Promise<void>;
+};
+
+const CONTACT_LABEL = "联系客服";
+const CONTACT_URL =
+  "https://my.feishu.cn/wiki/Ok18w9sHFipj78kmDpucQWlUnfb?from=from_copylink";
 
 const menuItems = [
   { id: "home", icon: Home, label: "首页" },
@@ -39,6 +48,19 @@ export function SidebarMenu({
 }: SidebarMenuProps) {
   const isVisible = (menuId: string) =>
     !visibleMenuIds || visibleMenuIds.includes(menuId);
+
+  const openContactLink = async () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (desktopBridge?.openExternal) {
+      await desktopBridge.openExternal(CONTACT_URL);
+      return;
+    }
+
+    window.open(CONTACT_URL, "_blank", "noopener,noreferrer");
+  };
 
   return (
     <TooltipProvider delayDuration={100}>
@@ -74,6 +96,22 @@ export function SidebarMenu({
 
         {/* Bottom Menu Items */}
         <div className="flex flex-col items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => {
+                  void openContactLink();
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              >
+                <LifeBuoy className="h-5 w-5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="bg-popover text-popover-foreground">
+              {CONTACT_LABEL}
+            </TooltipContent>
+          </Tooltip>
+
           {bottomItems.filter((item) => isVisible(item.id)).map((item) => (
             <Tooltip key={item.id}>
               <TooltipTrigger asChild>
