@@ -1,5 +1,4 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
-const { spawn } = require("node:child_process");
 const {
   appendFileSync,
   existsSync,
@@ -13,7 +12,7 @@ const isDev = !app.isPackaged;
 const PRODUCTION_PORT = process.env.PORT || "3232";
 const PRODUCTION_HOST = "127.0.0.1";
 
-let nextServerProcess = null;
+let productionServerStartupPromise = null;
 
 const getStartupLogPath = () =>
   path.join(app.getPath("userData"), "startup.log");
@@ -92,50 +91,39 @@ const waitForServer = (url, timeoutMs = 20000) =>
   });
 
 const startProductionServer = async () => {
-  if (nextServerProcess) {
-    return `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
+  if (productionServerStartupPromise) {
+    return productionServerStartupPromise;
   }
 
-  const serverPath = resolveProductionServerPath();
-  writeStartupLog(`Starting production server from ${serverPath}`);
-  nextServerProcess = spawn(process.execPath, [serverPath], {
-    cwd: path.dirname(serverPath),
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      HOSTNAME: PRODUCTION_HOST,
-      PORT: String(PRODUCTION_PORT),
-      META_PLAYER_DATA_DIR: path.join(app.getPath("userData"), ".meta-player"),
-      ELECTRON_RUN_AS_NODE: "1",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
+  productionServerStartupPromise = (async () => {
+    const serverPath = resolveProductionServerPath();
+    const url = `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
+
+    writeStartupLog(`Starting production server from ${serverPath}`);
+
+    process.env.NODE_ENV = "production";
+    process.env.HOSTNAME = PRODUCTION_HOST;
+    process.env.PORT = String(PRODUCTION_PORT);
+    process.env.META_PLAYER_DATA_DIR = path.join(app.getPath("userData"), ".meta-player");
+
+    try {
+      require(serverPath);
+    } catch (error) {
+      const resolvedServerPath = require.resolve(serverPath);
+      delete require.cache[resolvedServerPath];
+      throw error;
+    }
+
+    writeStartupLog(`Waiting for production server at ${url}`);
+    await waitForServer(url);
+    writeStartupLog(`Production server is ready at ${url}`);
+    return url;
+  })().catch((error) => {
+    productionServerStartupPromise = null;
+    throw error;
   });
 
-  nextServerProcess.stdout?.on("data", (chunk) => {
-    writeStartupLog(`[server stdout] ${chunk.toString().trimEnd()}`);
-  });
-
-  nextServerProcess.stderr?.on("data", (chunk) => {
-    writeStartupLog(`[server stderr] ${chunk.toString().trimEnd()}`);
-  });
-
-  nextServerProcess.on("error", (error) => {
-    reportStartupError("Failed to start production server", error);
-  });
-
-  nextServerProcess.on("exit", (code, signal) => {
-    writeStartupLog(
-      `Production server exited with code=${code ?? "null"} signal=${signal ?? "null"}`
-    );
-    nextServerProcess = null;
-  });
-
-  const url = `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
-  writeStartupLog(`Waiting for production server at ${url}`);
-  await waitForServer(url);
-  writeStartupLog(`Production server is ready at ${url}`);
-  return url;
+  return productionServerStartupPromise;
 };
 
 const applyProductionWindowHardening = (mainWindow) => {
@@ -287,13 +275,6 @@ process.on("uncaughtException", (error) => {
 
 process.on("unhandledRejection", (reason) => {
   reportStartupError("Unhandled rejection", reason);
-});
-
-app.on("before-quit", () => {
-  if (nextServerProcess) {
-    nextServerProcess.kill();
-    nextServerProcess = null;
-  }
 });
 
 app.on("window-all-closed", () => {

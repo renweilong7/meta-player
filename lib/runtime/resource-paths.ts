@@ -54,6 +54,20 @@ export const resolveBundledScriptPath = (scriptName: string) => {
   return candidates.find(isExistingPath) ?? null;
 };
 
+export const resolveBundledPythonScriptPath = (scriptBaseName: string) => {
+  const normalizedScriptBaseName = scriptBaseName.trim().replace(/\.pyc?$/i, "");
+  const candidates = [
+    `${normalizedScriptBaseName}.pyc`,
+    `${normalizedScriptBaseName}.py`,
+  ];
+
+  return (
+    candidates
+      .map((candidate) => resolveBundledScriptPath(candidate))
+      .find((candidate): candidate is string => candidate !== null) ?? null
+  );
+};
+
 export const resolveBundledPythonExecutable = () => {
   const explicitExecutable = process.env.META_PLAYER_PYTHON_EXECUTABLE?.trim();
   const electronResourcesPath = getElectronResourcesPath();

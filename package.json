@@ -19,7 +19,7 @@
   "build": {
     "appId": "com.renyi.meta-player",
     "productName": "Meta Player",
-    "asar": false,
+    "asar": true,
     "electronDist": "node_modules/electron/dist",
     "icon": "build/icons/icon.png",
     "directories": {

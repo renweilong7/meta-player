@@ -9,7 +9,7 @@ import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
 import {
   getDefaultLocalEmbeddingModelDirectory,
   resolveBundledPythonExecutable,
-  resolveBundledScriptPath,
+  resolveBundledPythonScriptPath,
 } from "@/lib/runtime/resource-paths";
 
 const isValidModelDirectory = (absolutePath: string) => {
@@ -119,7 +119,7 @@ export const generateLocalEmbeddings = async (
   }
 
   const model = resolveLocalEmbeddingModel(settings);
-  const scriptPath = resolveBundledScriptPath("local_embedding_service.py");
+  const scriptPath = resolveBundledPythonScriptPath("local_embedding_service");
   const pythonExecutable = resolveBundledPythonExecutable();
   const action = context?.action ?? "story_outline_embedding_index";
 

@@ -7,7 +7,7 @@ import { PersistedAppSettings, PersistedMaterial } from "@/lib/persistence/types
 import { extractSubtitleBlocksInRange } from "@/lib/project-script/srt";
 import {
   resolveBundledPythonExecutable,
-  resolveBundledScriptPath,
+  resolveBundledPythonScriptPath,
 } from "@/lib/runtime/resource-paths";
 import { SceneShotAnalysis, StoryOutlineSceneRecord } from "@/lib/story-outline/types";
 import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
@@ -225,7 +225,7 @@ const callDashScopeVisionByPython = async (input: {
   videoPath: string;
   prompt: string;
 }): Promise<PythonShotAnalysisPayload> => {
-  const scriptPath = resolveBundledScriptPath("vision_shot_analysis.py");
+  const scriptPath = resolveBundledPythonScriptPath("vision_shot_analysis");
   const pythonExecutable = resolveBundledPythonExecutable();
 
   if (!scriptPath) {
