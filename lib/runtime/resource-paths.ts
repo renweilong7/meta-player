@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const getElectronResourcesPath = () =>
@@ -23,12 +23,6 @@ const isExistingPath = (candidate: string | null | undefined): candidate is stri
 
 export const getAppDataDirectory = () =>
   process.env.META_PLAYER_DATA_DIR?.trim() || join(process.cwd(), ".meta-player");
-
-export const getDefaultLocalEmbeddingModelDirectory = () => {
-  const directory = join(getAppDataDirectory(), "models", "embeddings");
-  mkdirSync(directory, { recursive: true });
-  return directory;
-};
 
 const getBundledAppRootCandidates = () => {
   const electronResourcesPath = getElectronResourcesPath();
@@ -100,24 +94,6 @@ export const resolveBundledPythonExecutable = () => {
   }
 
   return process.env.NODE_ENV === "production" ? null : fallbackExecutable;
-};
-
-export const resolveBundledSqliteVecPath = (filename: string) => {
-  const explicitPath = process.env.META_PLAYER_SQLITE_VEC_PATH?.trim();
-  const platformDirectory = `${process.platform}-${process.arch}`;
-  const electronResourcesPath = getElectronResourcesPath();
-  const candidates = [
-    explicitPath,
-    ...getBundledAppRootCandidates().map((rootPath) =>
-      join(rootPath, "bin", "sqlite-vec", platformDirectory, filename)
-    ),
-    ...getBundledAppRootCandidates().map((rootPath) =>
-      join(rootPath, "sqlite-vec", platformDirectory, filename)
-    ),
-    electronResourcesPath ? join(electronResourcesPath, "sqlite-vec", platformDirectory, filename) : null,
-  ];
-
-  return candidates.find(isExistingPath) ?? null;
 };
 
 const resolveBinaryCandidate = (input: {

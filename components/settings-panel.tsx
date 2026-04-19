@@ -33,26 +33,36 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   CrossAssetSwitchMode,
-  LocalEmbeddingModelOption,
+  SearchAiProvider,
   StorySearchProvider,
+  TextAiProvider,
 } from "@/lib/persistence/types";
+import {
+  getEditableProviderApiKey,
+  getEditableProviderBaseUrl,
+  getEditableProviderTextModelName,
+  getDefaultProviderBaseUrl,
+  getProviderDisplayName,
+} from "@/lib/ai/provider-config";
 
 export interface AppSettingsValues {
   materialSavePath: string;
   defaultManagedImport: boolean;
   ffmpegExecutablePath: string;
   ffprobeExecutablePath: string;
-  aiApiBaseUrl: string;
-  aiApiKey: string;
-  aiModelName: string;
+  aiTextProvider: TextAiProvider;
+  openaiApiBaseUrl: string;
+  openaiApiKey: string;
+  grok2apiBaseUrl: string;
+  grok2apiApiKey: string;
+  openaiTextModelName: string;
+  grok2apiTextModelName: string;
   aiVisionBaseUrl: string;
   aiVisionApiKey: string;
   aiVisionModelName: string;
   aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
-  aiEmbeddingModelName: string;
-  localEmbeddingModelDirectory: string;
-  localEmbeddingModelName: string;
+  aiSearchProvider: SearchAiProvider;
   aiSearchModelName: string;
   localTtsModelName: string;
   autoGenerateProjectScriptTts: boolean;
@@ -78,8 +88,6 @@ interface SettingsPanelProps {
       message: string;
     };
   } | null;
-  localEmbeddingModels?: LocalEmbeddingModelOption[];
-  isLoadingLocalEmbeddingModels?: boolean;
   onChangeField: (
     field: keyof AppSettingsValues,
     value: string | boolean
@@ -87,8 +95,6 @@ interface SettingsPanelProps {
   onSave: () => void;
   onCheckMediaTools?: () => void;
   onBrowseMaterialDirectory?: () => void;
-  onBrowseLocalEmbeddingModelDirectory?: () => void;
-  onRefreshLocalEmbeddingModels?: () => void;
 }
 
 export function SettingsPanel({
@@ -97,14 +103,10 @@ export function SettingsPanel({
   isSaving = false,
   isCheckingMediaTools = false,
   mediaToolsCheckResult = null,
-  localEmbeddingModels = [],
-  isLoadingLocalEmbeddingModels = false,
   onChangeField,
   onSave,
   onCheckMediaTools,
   onBrowseMaterialDirectory,
-  onBrowseLocalEmbeddingModelDirectory,
-  onRefreshLocalEmbeddingModels,
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVisionApiKey, setShowVisionApiKey] = useState(false);
@@ -113,21 +115,67 @@ export function SettingsPanel({
     defaultManagedImport: values.defaultManagedImport ?? false,
     ffmpegExecutablePath: values.ffmpegExecutablePath ?? "",
     ffprobeExecutablePath: values.ffprobeExecutablePath ?? "",
-    aiApiBaseUrl: values.aiApiBaseUrl ?? "",
-    aiApiKey: values.aiApiKey ?? "",
-    aiModelName: values.aiModelName ?? "",
+    aiTextProvider: values.aiTextProvider ?? "openai_compatible",
+    openaiApiBaseUrl: values.openaiApiBaseUrl ?? "",
+    openaiApiKey: values.openaiApiKey ?? "",
+    grok2apiBaseUrl: values.grok2apiBaseUrl ?? "",
+    grok2apiApiKey: values.grok2apiApiKey ?? "",
+    openaiTextModelName: values.openaiTextModelName ?? "",
+    grok2apiTextModelName: values.grok2apiTextModelName ?? "",
     aiVisionBaseUrl: values.aiVisionBaseUrl ?? "",
     aiVisionApiKey: values.aiVisionApiKey ?? "",
     aiVisionModelName: values.aiVisionModelName ?? "",
     aiVisionFps: values.aiVisionFps ?? "2",
-    storySearchProvider: values.storySearchProvider ?? "remote_embedding",
-    aiEmbeddingModelName: values.aiEmbeddingModelName ?? "",
-    localEmbeddingModelDirectory: values.localEmbeddingModelDirectory ?? "",
-    localEmbeddingModelName: values.localEmbeddingModelName ?? "",
+    storySearchProvider: values.storySearchProvider ?? "keyword",
+    aiSearchProvider: values.aiSearchProvider ?? "openai_compatible",
     aiSearchModelName: values.aiSearchModelName ?? "",
     localTtsModelName: values.localTtsModelName ?? "Tingting",
     autoGenerateProjectScriptTts: values.autoGenerateProjectScriptTts ?? true,
     crossAssetSwitchMode: values.crossAssetSwitchMode ?? "frame_hold",
+  };
+  const textProviderBaseUrlPlaceholder = getDefaultProviderBaseUrl(
+    normalizedValues.aiTextProvider
+  );
+  const textProviderName = getProviderDisplayName(normalizedValues.aiTextProvider);
+  const searchProviderName = getProviderDisplayName(normalizedValues.aiSearchProvider);
+  const editableTextProviderBaseUrl = getEditableProviderBaseUrl(
+    normalizedValues,
+    normalizedValues.aiTextProvider
+  );
+  const editableTextProviderApiKey = getEditableProviderApiKey(
+    normalizedValues,
+    normalizedValues.aiTextProvider
+  );
+  const editableTextProviderModelName = getEditableProviderTextModelName(
+    normalizedValues,
+    normalizedValues.aiTextProvider
+  );
+
+  const handleCurrentProviderBaseUrlChange = (value: string) => {
+    onChangeField(
+      normalizedValues.aiTextProvider === "grok2api"
+        ? "grok2apiBaseUrl"
+        : "openaiApiBaseUrl",
+      value
+    );
+  };
+
+  const handleCurrentProviderApiKeyChange = (value: string) => {
+    onChangeField(
+      normalizedValues.aiTextProvider === "grok2api"
+        ? "grok2apiApiKey"
+        : "openaiApiKey",
+      value
+    );
+  };
+
+  const handleCurrentProviderTextModelNameChange = (value: string) => {
+    onChangeField(
+      normalizedValues.aiTextProvider === "grok2api"
+        ? "grok2apiTextModelName"
+        : "openaiTextModelName",
+      value
+    );
   };
 
   return (
@@ -234,7 +282,7 @@ export function SettingsPanel({
                 AI 服务
               </CardTitle>
               <CardDescription>
-                使用 OpenAI 兼容接口配置推理服务，当前仅完成表单结构和调用入口预留。
+                支持为文本模型和大模型剧情搜索分别选择 OpenAI 兼容链路或 grok2api 链路。
               </CardDescription>
             </CardHeader>
             <CardContent className="pt-6">
@@ -247,6 +295,28 @@ export function SettingsPanel({
                     </p>
                   </div>
                   <Field>
+                    <FieldLabel htmlFor="ai-text-provider">文本模型 Provider</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={normalizedValues.aiTextProvider}
+                        onValueChange={(value) =>
+                          onChangeField("aiTextProvider", value as TextAiProvider)
+                        }
+                      >
+                        <SelectTrigger id="ai-text-provider" className="h-10 w-full">
+                          <SelectValue placeholder="选择文本模型 Provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="openai_compatible">OpenAI 兼容</SelectItem>
+                          <SelectItem value="grok2api">grok2api</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        控制剧情大纲提取等文本任务走哪条模型链路。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                  <Field>
                     <FieldLabel htmlFor="ai-api-base-url">
                       文本模型 Base URL
                     </FieldLabel>
@@ -255,16 +325,16 @@ export function SettingsPanel({
                         <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           id="ai-api-base-url"
-                          value={normalizedValues.aiApiBaseUrl}
+                          value={editableTextProviderBaseUrl}
                           onChange={(event) =>
-                            onChangeField("aiApiBaseUrl", event.target.value)
+                            handleCurrentProviderBaseUrlChange(event.target.value)
                           }
-                          placeholder="https://api.openai.com/v1"
+                          placeholder={textProviderBaseUrlPlaceholder}
                           className="h-10 pl-9"
                         />
                       </div>
                       <FieldDescription>
-                        兼容 OpenAI 格式即可，例如官方接口或自部署网关。
+                        当前 Provider 为 {textProviderName}，兼容 OpenAI 格式即可，例如官方接口、自部署网关或本地 grok2api 服务。
                       </FieldDescription>
                     </FieldContent>
                   </Field>
@@ -276,9 +346,9 @@ export function SettingsPanel({
                         <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           id="ai-model-name"
-                          value={normalizedValues.aiModelName}
+                          value={editableTextProviderModelName}
                           onChange={(event) =>
-                            onChangeField("aiModelName", event.target.value)
+                            handleCurrentProviderTextModelNameChange(event.target.value)
                           }
                           placeholder="gpt-4o-mini"
                           className="h-10 pl-9"
@@ -298,9 +368,9 @@ export function SettingsPanel({
                           <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                           <Input
                             id="ai-api-key"
-                            value={normalizedValues.aiApiKey}
+                            value={editableTextProviderApiKey}
                             onChange={(event) =>
-                              onChangeField("aiApiKey", event.target.value)
+                              handleCurrentProviderApiKeyChange(event.target.value)
                             }
                             type={showApiKey ? "text" : "password"}
                             placeholder="sk-..."
@@ -336,10 +406,10 @@ export function SettingsPanel({
                 <div className="rounded-lg border border-border/70 p-4">
                   <div className="mb-4">
                     <p className="text-sm font-medium text-foreground">
-                      检索与 Embedding
+                      剧情搜索
                     </p>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      将剧情搜索方案、远端 Embedding 和本地 Embedding 模型集中到同一组，避免和文本/视觉模型混排。
+                      配置剧情搜索策略。当前保留关键词检索和直接大模型搜索两条路径。
                     </p>
                   </div>
                   <Field>
@@ -355,115 +425,37 @@ export function SettingsPanel({
                           <SelectValue placeholder="选择剧情搜索方案" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
-                          <SelectItem value="local_embedding">
-                            本地 Embedding 模型（测试功能）
-                          </SelectItem>
+                          <SelectItem value="keyword">关键词检索</SelectItem>
                           <SelectItem value="llm">直接大模型搜索</SelectItem>
                         </SelectContent>
                       </Select>
                       <FieldDescription>
-                        当前已实现远端 Embedding API 和直接大模型搜索；本地模型为测试功能。
+                        关键词检索不依赖额外模型；大模型搜索会调用文本模型对候选剧情片段进行理解和排序。
                       </FieldDescription>
                     </FieldContent>
                   </Field>
 
                   <Field>
-                    <FieldLabel htmlFor="ai-embedding-model-name">
-                      远端 Embedding 模型名称
-                    </FieldLabel>
-                    <FieldContent>
-                      <div className="relative">
-                        <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          id="ai-embedding-model-name"
-                          value={normalizedValues.aiEmbeddingModelName}
-                          onChange={(event) =>
-                            onChangeField("aiEmbeddingModelName", event.target.value)
-                          }
-                          placeholder="text-embedding-3-small"
-                          className="h-10 pl-9"
-                        />
-                      </div>
-                      <FieldDescription>
-                        作为新建项目时默认使用的远端 Embedding 模型名称。
-                      </FieldDescription>
-                    </FieldContent>
-                  </Field>
-
-                  <Field>
-                    <FieldLabel htmlFor="local-embedding-model-directory">
-                      本地 Embedding 模型目录（测试功能）
-                    </FieldLabel>
-                    <FieldContent>
-                      <div className="flex flex-col gap-3 md:flex-row">
-                        <Input
-                          id="local-embedding-model-directory"
-                          value={normalizedValues.localEmbeddingModelDirectory}
-                          onChange={(event) =>
-                            onChangeField("localEmbeddingModelDirectory", event.target.value)
-                          }
-                          placeholder="/Users/renyi/Models/embeddings"
-                          className="h-10"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="md:w-auto"
-                          onClick={onBrowseLocalEmbeddingModelDirectory}
-                        >
-                          <FolderOpen className="h-4 w-4" />
-                          选择目录
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="md:w-auto"
-                          onClick={onRefreshLocalEmbeddingModels}
-                          disabled={isLoadingLocalEmbeddingModels}
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                          刷新模型
-                        </Button>
-                      </div>
-                      <FieldDescription>
-                        应用会扫描这个目录下的一级子目录。打包版建议把模型手动放到这里，再点“刷新模型”。
-                      </FieldDescription>
-                    </FieldContent>
-                  </Field>
-
-                  <Field>
-                    <FieldLabel htmlFor="local-embedding-model-name">
-                      本地 Embedding 模型（测试功能）
+                    <FieldLabel htmlFor="ai-search-provider">
+                      大模型剧情搜索 Provider
                     </FieldLabel>
                     <FieldContent>
                       <Select
-                        value={normalizedValues.localEmbeddingModelName}
+                        value={normalizedValues.aiSearchProvider}
                         onValueChange={(value) =>
-                          onChangeField("localEmbeddingModelName", value)
+                          onChangeField("aiSearchProvider", value as SearchAiProvider)
                         }
                       >
-                        <SelectTrigger
-                          id="local-embedding-model-name"
-                          className="h-10 w-full"
-                        >
-                          <SelectValue placeholder="选择本地 Embedding 模型（测试功能）" />
+                        <SelectTrigger id="ai-search-provider" className="h-10 w-full">
+                          <SelectValue placeholder="选择大模型搜索 Provider" />
                         </SelectTrigger>
                         <SelectContent>
-                          {localEmbeddingModels.map((model) => (
-                            <SelectItem key={model.id} value={model.id}>
-                              {model.name}（测试功能）
-                              {model.source === "custom" ? " · 本地目录" : " · 内置"}
-                            </SelectItem>
-                          ))}
+                          <SelectItem value="openai_compatible">OpenAI 兼容</SelectItem>
+                          <SelectItem value="grok2api">grok2api</SelectItem>
                         </SelectContent>
                       </Select>
                       <FieldDescription>
-                        {isLoadingLocalEmbeddingModels
-                          ? "正在扫描本地 Embedding 模型（测试功能）..."
-                          : localEmbeddingModels.length > 0
-                            ? "测试功能：作为新建项目时默认使用的本地 Embedding 模型。"
-                            : "测试功能：当前未扫描到可用模型，请检查模型目录中是否已放入完整模型。"}
+                        当前 Provider 为 {searchProviderName}。它会自动读取该 Provider 自己保存的 Base URL 和 API Key，不会覆盖另一套配置。
                       </FieldDescription>
                     </FieldContent>
                   </Field>

@@ -25,7 +25,6 @@ import {
 import {
   fetchLibrarySnapshot,
   fetchAiUsageSnapshot,
-  fetchLocalEmbeddingModels,
   fetchAuthorizationSnapshot,
   refreshAuthorizationSnapshot,
   validateMediaToolExecutables,
@@ -56,7 +55,6 @@ import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
 import {
   MaterialImportInput,
   CrossAssetSwitchMode,
-  LocalEmbeddingModelOption,
   PersistedAiUsageSnapshot,
   PersistedProjectClip,
   PersistedProjectClipCompilation,
@@ -70,6 +68,7 @@ import {
   generateStoryOutline,
   mapStoryOutlineToScenes,
 } from "@/lib/story-outline/service";
+import { resolveTextModelProviderConfig } from "@/lib/ai/provider-config";
 import { SceneShotAnalysis, StoryScene } from "@/lib/story-outline/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
@@ -78,17 +77,21 @@ const defaultSettings: AppSettingsValues = {
   defaultManagedImport: false,
   ffmpegExecutablePath: "",
   ffprobeExecutablePath: "",
-  aiApiBaseUrl: "https://api.openai.com/v1",
-  aiApiKey: "",
-  aiModelName: "gpt-4o-mini",
+  aiTextProvider: "openai_compatible",
+  openaiApiBaseUrl: "https://api.openai.com/v1",
+  openaiApiKey: "",
+  grok2apiBaseUrl:
+    process.env.NEXT_PUBLIC_META_PLAYER_GROK2API_BASE_URL?.trim() ||
+    "http://127.0.0.1:8000/v1",
+  grok2apiApiKey: "",
+  openaiTextModelName: "gpt-4o-mini",
+  grok2apiTextModelName: "grok-2-latest",
   aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
   aiVisionApiKey: "",
   aiVisionModelName: "qwen3.6-plus",
   aiVisionFps: "2",
-  storySearchProvider: "remote_embedding",
-  aiEmbeddingModelName: "text-embedding-3-small",
-  localEmbeddingModelDirectory: "",
-  localEmbeddingModelName: "bge-small-zh",
+  storySearchProvider: "keyword",
+  aiSearchProvider: "openai_compatible",
   aiSearchModelName: "gpt-4o-mini",
   localTtsModelName: "Tingting",
   autoGenerateProjectScriptTts: true,
@@ -200,8 +203,6 @@ export default function VideoEditorPage() {
   const [isRefreshingUsage, setIsRefreshingUsage] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
-  const [isLoadingLocalEmbeddingModels, setIsLoadingLocalEmbeddingModels] =
-    useState(false);
   const [isCheckingMediaTools, setIsCheckingMediaTools] = useState(false);
   const [mediaToolsCheckResult, setMediaToolsCheckResult] = useState<{
     ffmpeg: {
@@ -217,12 +218,10 @@ export default function VideoEditorPage() {
       message: string;
     };
   } | null>(null);
-  const [localEmbeddingModels, setLocalEmbeddingModels] = useState<
-    LocalEmbeddingModelOption[]
-  >([]);
   const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const [authorizationError, setAuthorizationError] = useState<string | null>(null);
   const [authorization, setAuthorization] = useState<AuthorizationSnapshot | null>(
     null
   );
@@ -230,7 +229,7 @@ export default function VideoEditorPage() {
     useState<StoryOutlineSearchResult | null>(null);
   const [outlineSearchQuery, setOutlineSearchQuery] = useState("");
   const [outlineSearchState, setOutlineSearchState] = useState<
-    "idle" | "loading" | "embedding" | "keyword" | "llm"
+    "idle" | "loading" | "keyword" | "llm"
   >("idle");
   const [outlineSearchResults, setOutlineSearchResults] = useState<
     StoryOutlineSearchResult[]
@@ -277,6 +276,31 @@ export default function VideoEditorPage() {
   const projectScriptPlaybackTimerRef = useRef<number | null>(null);
 
   useEffect(() => installGlobalClientDiagnostics(), []);
+
+  const loadAuthorizationSnapshot = async (mode: "initial" | "refresh" = "initial") => {
+    if (mode === "refresh") {
+      setIsRefreshingAuthorization(true);
+    }
+
+    try {
+      const snapshot =
+        mode === "refresh"
+          ? await refreshAuthorizationSnapshot()
+          : await fetchAuthorizationSnapshot();
+      setAuthorization(snapshot);
+      setAuthorizationError(null);
+      return snapshot;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "读取授权状态失败。";
+      setAuthorizationError(message);
+      throw error;
+    } finally {
+      if (mode === "refresh") {
+        setIsRefreshingAuthorization(false);
+      }
+    }
+  };
 
   const refreshUsageSnapshot = async () => {
     try {
@@ -458,43 +482,12 @@ export default function VideoEditorPage() {
   useEffect(() => {
     let isActive = true;
 
-    const loadLocalModels = async (directory: string) => {
-      try {
-        setIsLoadingLocalEmbeddingModels(true);
-        const models = await fetchLocalEmbeddingModels(directory);
-
-        if (!isActive) {
-          return;
-        }
-
-        setLocalEmbeddingModels(models);
-      } catch (error) {
-        void reportClientDiagnosticEvent({
-          level: "error",
-          event: "bootstrap.failed",
-          error,
-        });
-        if (!isActive) {
-          return;
-        }
-
-        setLibraryError(
-          error instanceof Error ? error.message : "读取本地 Embedding 模型列表失败。"
-        );
-      } finally {
-        if (isActive) {
-          setIsLoadingLocalEmbeddingModels(false);
-        }
-      }
-    };
-
     const loadSnapshot = async () => {
       setIsBootstrapping(true);
       setLibraryError(null);
 
       try {
         const snapshot = await fetchLibrarySnapshot();
-        const authorizationSnapshot = await fetchAuthorizationSnapshot();
         const legacyProjects =
           snapshot.projects.length === 0 ? loadLegacyProjects(snapshot.materials) : [];
         const nextProjects =
@@ -506,14 +499,6 @@ export default function VideoEditorPage() {
                     name: project.name,
                     description: project.description,
                     storySearchProvider: snapshot.settings.storySearchProvider,
-                    embeddingModelSource:
-                      snapshot.settings.storySearchProvider === "local_embedding"
-                        ? "local"
-                        : "remote",
-                    embeddingModelId:
-                      snapshot.settings.storySearchProvider === "local_embedding"
-                        ? snapshot.settings.localEmbeddingModelName
-                        : snapshot.settings.aiEmbeddingModelName,
                   });
 
                   if (project.materialIds.length === 0) {
@@ -535,8 +520,6 @@ export default function VideoEditorPage() {
         setSettings(normalizedSettings);
         setSavedSettings(normalizedSettings);
         setUsageSnapshot(snapshot.usage ?? defaultUsageSnapshot);
-        void loadLocalModels(snapshot.settings.localEmbeddingModelDirectory);
-        setAuthorization(authorizationSnapshot);
         setProjects(nextProjects);
         setCurrentProjectId((current) => current ?? nextProjects[0]?.id ?? null);
 
@@ -568,74 +551,22 @@ export default function VideoEditorPage() {
   useEffect(() => {
     let isActive = true;
 
-    const refreshModels = async () => {
-      try {
-        setIsLoadingLocalEmbeddingModels(true);
-        const models = await fetchLocalEmbeddingModels(
-          settings.localEmbeddingModelDirectory
-        );
+    void loadAuthorizationSnapshot("initial").catch((error) => {
+      void reportClientDiagnosticEvent({
+        level: "warn",
+        event: "authorization.initial_load_failed",
+        error,
+      });
 
-        if (!isActive) {
-          return;
-        }
-
-        setLocalEmbeddingModels(models);
-        const matchedModel = models.find(
-          (model) =>
-            model.id === settings.localEmbeddingModelName ||
-            model.name === settings.localEmbeddingModelName ||
-            model.directoryName === settings.localEmbeddingModelName
-        );
-        if (matchedModel && matchedModel.id !== settings.localEmbeddingModelName) {
-          setSettings((previous) => ({
-            ...previous,
-            localEmbeddingModelName: matchedModel.id,
-          }));
-          setSavedSettings((previous) =>
-            previous.localEmbeddingModelName === settings.localEmbeddingModelName
-              ? {
-                  ...previous,
-                  localEmbeddingModelName: matchedModel.id,
-                }
-              : previous
-          );
-        } else if (models.length > 0 && !matchedModel) {
-          setSettings((previous) => ({
-            ...previous,
-            localEmbeddingModelName: models[0].id,
-          }));
-          setSavedSettings((previous) =>
-            previous.localEmbeddingModelName === settings.localEmbeddingModelName
-              ? {
-                  ...previous,
-                  localEmbeddingModelName: models[0].id,
-                }
-              : previous
-          );
-        }
-      } catch (error) {
-        if (!isActive) {
-          return;
-        }
-
-        setLibraryError(
-          error instanceof Error ? error.message : "读取本地 Embedding 模型列表失败。"
-        );
-      } finally {
-        if (isActive) {
-          setIsLoadingLocalEmbeddingModels(false);
-        }
+      if (!isActive) {
+        return;
       }
-    };
-
-    if (!isBootstrapping) {
-      void refreshModels();
-    }
+    });
 
     return () => {
       isActive = false;
     };
-  }, [isBootstrapping, settings.localEmbeddingModelDirectory]);
+  }, []);
 
   useEffect(() => {
     if (
@@ -800,8 +731,6 @@ export default function VideoEditorPage() {
     name: string;
     description?: string;
     storySearchProvider: ProjectItem["storySearchProvider"];
-    embeddingModelSource: ProjectItem["embeddingModelSource"];
-    embeddingModelId: string;
   }) => {
     const nextProject = await postProject(input);
     setProjects((previous) => [nextProject, ...previous]);
@@ -814,8 +743,6 @@ export default function VideoEditorPage() {
       name?: string;
       description?: string;
       storySearchProvider?: ProjectItem["storySearchProvider"];
-      embeddingModelSource?: ProjectItem["embeddingModelSource"];
-      embeddingModelId?: string;
       materialIds?: string[];
       crossAssetSwitchMode?: CrossAssetSwitchMode;
       autoTrimIntroOutro?: boolean;
@@ -1662,70 +1589,6 @@ export default function VideoEditorPage() {
       });
   };
 
-  const handleBrowseLocalEmbeddingModelDirectory = () => {
-    const desktopBridge = (
-      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
-    ).metaPlayerDesktop;
-
-    if (!desktopBridge?.chooseDirectory) {
-      setLibraryError("当前桌面环境未启用目录选择能力。");
-      return;
-    }
-
-    void desktopBridge
-      .chooseDirectory(settings.localEmbeddingModelDirectory)
-      .then((selectedPath) => {
-        if (!selectedPath) {
-          return;
-        }
-
-        setSettings((previous) => ({
-          ...previous,
-          localEmbeddingModelDirectory: selectedPath,
-        }));
-      })
-      .catch((error) => {
-        setLibraryError(
-          error instanceof Error ? error.message : "选择本地模型目录失败。"
-        );
-      });
-  };
-
-  const handleRefreshLocalEmbeddingModels = async () => {
-    setLibraryError(null);
-    setIsLoadingLocalEmbeddingModels(true);
-
-    try {
-      const models = await fetchLocalEmbeddingModels(
-        settings.localEmbeddingModelDirectory
-      );
-      setLocalEmbeddingModels(models);
-      const matchedModel = models.find(
-        (model) =>
-          model.id === settings.localEmbeddingModelName ||
-          model.name === settings.localEmbeddingModelName ||
-          model.directoryName === settings.localEmbeddingModelName
-      );
-      if (matchedModel && matchedModel.id !== settings.localEmbeddingModelName) {
-        setSettings((previous) => ({
-          ...previous,
-          localEmbeddingModelName: matchedModel.id,
-        }));
-      } else if (models.length > 0 && !matchedModel) {
-        setSettings((previous) => ({
-          ...previous,
-          localEmbeddingModelName: models[0].id,
-        }));
-      }
-    } catch (error) {
-      setLibraryError(
-        error instanceof Error ? error.message : "刷新本地模型列表失败。"
-      );
-    } finally {
-      setIsLoadingLocalEmbeddingModels(false);
-    }
-  };
-
   const handleCheckMediaTools = async () => {
     setLibraryError(null);
     setIsCheckingMediaTools(true);
@@ -1746,18 +1609,14 @@ export default function VideoEditorPage() {
   };
 
   const handleRefreshAuthorization = async () => {
-    setIsRefreshingAuthorization(true);
     setLibraryError(null);
 
     try {
-      const nextAuthorization = await refreshAuthorizationSnapshot();
-      setAuthorization(nextAuthorization);
+      await loadAuthorizationSnapshot("refresh");
     } catch (error) {
-      setLibraryError(
-        error instanceof Error ? error.message : "刷新授权状态失败。"
-      );
-    } finally {
-      setIsRefreshingAuthorization(false);
+      const message =
+        error instanceof Error ? error.message : "刷新授权状态失败。";
+      setLibraryError(message);
     }
   };
 
@@ -1817,6 +1676,8 @@ export default function VideoEditorPage() {
 
     setSelectedMediaId(mediaId);
 
+    const textProviderConfig = resolveTextModelProviderConfig(settings);
+
     if (!targetMedia.synopsis?.trim()) {
       applyLocalMediaPatch(mediaId, {
         outlineExtractionStatus: "error",
@@ -1842,12 +1703,12 @@ export default function VideoEditorPage() {
     }
 
     if (
-      !settings.aiApiBaseUrl.trim() ||
-      !settings.aiApiKey.trim() ||
-      !settings.aiModelName.trim()
+      !textProviderConfig.baseUrl ||
+      !textProviderConfig.apiKey ||
+      !textProviderConfig.model
     ) {
       const errorMessage =
-        "请先在设置页填写文本模型 Base URL、API Key 和模型名称。";
+        "请先在设置页填写文本模型 Provider、Base URL、API Key 和模型名称。";
 
       applyLocalMediaPatch(mediaId, {
         outlineExtractionStatus: "error",
@@ -1879,9 +1740,10 @@ export default function VideoEditorPage() {
           srtContent: targetMedia.srtContent,
         },
         {
-          baseUrl: settings.aiApiBaseUrl,
-          apiKey: settings.aiApiKey,
-          model: settings.aiModelName,
+          provider: textProviderConfig.provider,
+          baseUrl: textProviderConfig.baseUrl,
+          apiKey: textProviderConfig.apiKey,
+          model: textProviderConfig.model,
           materialId: mediaId,
         }
       );
@@ -1901,8 +1763,8 @@ export default function VideoEditorPage() {
       } catch (indexError) {
         setLibraryError(
           indexError instanceof Error
-            ? `剧情大纲已生成，但向量索引失败：${indexError.message}`
-            : "剧情大纲已生成，但向量索引失败。"
+            ? `剧情大纲已生成，但搜索索引同步失败：${indexError.message}`
+            : "剧情大纲已生成，但搜索索引同步失败。"
         );
         void refreshUsageSnapshot();
       }
@@ -2133,20 +1995,15 @@ export default function VideoEditorPage() {
           isSaving={isSavingSettings}
           isCheckingMediaTools={isCheckingMediaTools}
           mediaToolsCheckResult={mediaToolsCheckResult}
-          localEmbeddingModels={localEmbeddingModels}
-          isLoadingLocalEmbeddingModels={isLoadingLocalEmbeddingModels}
           onChangeField={handleSettingsFieldChange}
           onSave={handleSaveSettings}
           onCheckMediaTools={handleCheckMediaTools}
           onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
-          onBrowseLocalEmbeddingModelDirectory={
-            handleBrowseLocalEmbeddingModelDirectory
-          }
-          onRefreshLocalEmbeddingModels={handleRefreshLocalEmbeddingModels}
         />
       ) : activeMenu === "user" ? (
         <UserPanel
           authorization={authorization}
+          authorizationError={authorizationError}
           isRefreshingAuthorization={isRefreshingAuthorization}
           isExportingDiagnostics={isExportingDiagnostics}
           onRefreshAuthorization={handleRefreshAuthorization}
@@ -2161,8 +2018,6 @@ export default function VideoEditorPage() {
             selectedProjectId={currentProjectId}
             canManageProjects={canManageProjects}
             defaultStorySearchProvider={settings.storySearchProvider}
-            defaultRemoteEmbeddingModel={settings.aiEmbeddingModelName}
-            localEmbeddingModels={localEmbeddingModels}
             onCreateProject={handleCreateProject}
             onUpdateProject={handleUpdateProject}
             onDeleteProject={handleDeleteProject}

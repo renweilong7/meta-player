@@ -5,7 +5,6 @@ import {
   ArrowRight,
   Edit2,
   FolderKanban,
-  Lock,
   MoreVertical,
   Plus,
   Search,
@@ -32,8 +31,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   CrossAssetSwitchMode,
-  LocalEmbeddingModelOption,
-  ProjectEmbeddingModelSource,
   StorySearchProvider,
 } from "@/lib/persistence/types";
 
@@ -43,9 +40,6 @@ export interface ProjectItem {
   description?: string;
   materialIds: string[];
   storySearchProvider: StorySearchProvider;
-  embeddingModelSource: ProjectEmbeddingModelSource;
-  embeddingModelId: string;
-  embeddingModelLocked: boolean;
   crossAssetSwitchMode?: CrossAssetSwitchMode;
   autoTrimIntroOutro?: boolean;
   introTrimSeconds?: number;
@@ -97,14 +91,10 @@ interface ProjectViewProps {
   selectedProjectId: string | null;
   canManageProjects?: boolean;
   defaultStorySearchProvider: StorySearchProvider;
-  defaultRemoteEmbeddingModel: string;
-  localEmbeddingModels: LocalEmbeddingModelOption[];
   onCreateProject: (input: {
     name: string;
     description?: string;
     storySearchProvider: StorySearchProvider;
-    embeddingModelSource: ProjectEmbeddingModelSource;
-    embeddingModelId: string;
   }) => void | Promise<void>;
   onUpdateProject: (
     id: string,
@@ -112,8 +102,6 @@ interface ProjectViewProps {
       name: string;
       description?: string;
       storySearchProvider?: StorySearchProvider;
-      embeddingModelSource?: ProjectEmbeddingModelSource;
-      embeddingModelId?: string;
       crossAssetSwitchMode?: CrossAssetSwitchMode;
       autoTrimIntroOutro?: boolean;
       introTrimSeconds?: number;
@@ -129,8 +117,6 @@ export function ProjectView({
   selectedProjectId,
   canManageProjects = true,
   defaultStorySearchProvider,
-  defaultRemoteEmbeddingModel,
-  localEmbeddingModels,
   onCreateProject,
   onUpdateProject,
   onDeleteProject,
@@ -143,12 +129,6 @@ export function ProjectView({
   const [projectDescription, setProjectDescription] = useState("");
   const [storySearchProvider, setStorySearchProvider] =
     useState<StorySearchProvider>(defaultStorySearchProvider);
-  const [remoteEmbeddingModelId, setRemoteEmbeddingModelId] =
-    useState(defaultRemoteEmbeddingModel);
-  const [localEmbeddingModelId, setLocalEmbeddingModelId] = useState(
-    localEmbeddingModels[0]?.id ?? ""
-  );
-  const [embeddingModelLocked, setEmbeddingModelLocked] = useState(false);
   const [crossAssetSwitchMode, setCrossAssetSwitchMode] =
     useState<CrossAssetSwitchMode>("frame_hold");
   const [autoTrimIntroOutro, setAutoTrimIntroOutro] = useState(false);
@@ -174,9 +154,6 @@ export function ProjectView({
     setProjectName("");
     setProjectDescription("");
     setStorySearchProvider(defaultStorySearchProvider);
-    setRemoteEmbeddingModelId(defaultRemoteEmbeddingModel);
-    setLocalEmbeddingModelId(localEmbeddingModels[0]?.id ?? "");
-    setEmbeddingModelLocked(false);
     setCrossAssetSwitchMode("frame_hold");
     setAutoTrimIntroOutro(false);
     setIntroTrimSeconds("0");
@@ -188,9 +165,6 @@ export function ProjectView({
     setProjectName("");
     setProjectDescription("");
     setStorySearchProvider(defaultStorySearchProvider);
-    setRemoteEmbeddingModelId(defaultRemoteEmbeddingModel);
-    setLocalEmbeddingModelId(localEmbeddingModels[0]?.id ?? "");
-    setEmbeddingModelLocked(false);
     setIsDialogOpen(true);
   };
 
@@ -199,17 +173,6 @@ export function ProjectView({
     setProjectName(project.name);
     setProjectDescription(project.description ?? "");
     setStorySearchProvider(project.storySearchProvider);
-    setRemoteEmbeddingModelId(
-      project.embeddingModelSource === "remote"
-        ? project.embeddingModelId
-        : defaultRemoteEmbeddingModel
-    );
-    setLocalEmbeddingModelId(
-      project.embeddingModelSource === "local"
-        ? project.embeddingModelId
-        : localEmbeddingModels[0]?.id ?? ""
-    );
-    setEmbeddingModelLocked(project.embeddingModelLocked);
     setCrossAssetSwitchMode(project.crossAssetSwitchMode ?? "frame_hold");
     setAutoTrimIntroOutro(project.autoTrimIntroOutro ?? false);
     setIntroTrimSeconds(String(project.introTrimSeconds ?? 0));
@@ -222,14 +185,8 @@ export function ProjectView({
     const normalizedDescription = projectDescription.trim();
     const normalizedIntroTrimSeconds = Math.max(Number(introTrimSeconds) || 0, 0);
     const normalizedOutroTrimSeconds = Math.max(Number(outroTrimSeconds) || 0, 0);
-    const embeddingModelSource: ProjectEmbeddingModelSource =
-      storySearchProvider === "local_embedding" ? "local" : "remote";
-    const embeddingModelId =
-      embeddingModelSource === "local"
-        ? localEmbeddingModelId.trim()
-        : remoteEmbeddingModelId.trim();
 
-    if (!normalizedName || !embeddingModelId) {
+    if (!normalizedName) {
       return;
     }
 
@@ -238,8 +195,6 @@ export function ProjectView({
         name: normalizedName,
         description: normalizedDescription || undefined,
         storySearchProvider,
-        embeddingModelSource,
-        embeddingModelId,
         crossAssetSwitchMode,
         autoTrimIntroOutro,
         introTrimSeconds: normalizedIntroTrimSeconds,
@@ -250,8 +205,6 @@ export function ProjectView({
         name: normalizedName,
         description: normalizedDescription || undefined,
         storySearchProvider,
-        embeddingModelSource,
-        embeddingModelId,
       });
     }
 
@@ -390,7 +343,7 @@ export function ProjectView({
           <DialogHeader>
             <DialogTitle>{editingProjectId ? "编辑项目" : "新建项目"}</DialogTitle>
             <DialogDescription>
-              项目会绑定剧情搜索方案和 Embedding 模型。项目一旦生成过向量索引，该模型将锁定。
+              每个项目都会绑定自己的剧情搜索方案，方便按项目内容选择更合适的检索方式。
             </DialogDescription>
           </DialogHeader>
 
@@ -426,67 +379,17 @@ export function ProjectView({
               <Label htmlFor="project-search-provider">剧情搜索方案</Label>
               <Select
                 value={storySearchProvider}
-                onValueChange={(value) =>
-                  !embeddingModelLocked &&
-                  setStorySearchProvider(value as StorySearchProvider)
-                }
+                onValueChange={(value) => setStorySearchProvider(value as StorySearchProvider)}
               >
                 <SelectTrigger id="project-search-provider">
                   <SelectValue placeholder="选择剧情搜索方案" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="remote_embedding">远端 Embedding API</SelectItem>
-                  <SelectItem value="local_embedding">
-                    本地 Embedding 模型（测试功能）
-                  </SelectItem>
+                  <SelectItem value="keyword">关键词检索</SelectItem>
                   <SelectItem value="llm">直接大模型搜索</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-
-            {storySearchProvider === "local_embedding" ? (
-              <div className="space-y-2">
-                <Label htmlFor="project-local-embedding-model">
-                  本地 Embedding 模型（测试功能）
-                </Label>
-                <Select
-                  value={localEmbeddingModelId}
-                  onValueChange={(value) =>
-                    !embeddingModelLocked && setLocalEmbeddingModelId(value)
-                  }
-                >
-                  <SelectTrigger id="project-local-embedding-model">
-                    <SelectValue placeholder="选择本地 Embedding 模型（测试功能）" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {localEmbeddingModels.map((model) => (
-                      <SelectItem key={model.id} value={model.id}>
-                        {model.name}（测试功能）
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : storySearchProvider === "remote_embedding" ? (
-              <div className="space-y-2">
-                <Label htmlFor="project-remote-embedding-model">远端 Embedding 模型</Label>
-                <Input
-                  id="project-remote-embedding-model"
-                  value={remoteEmbeddingModelId}
-                  onChange={(event) =>
-                    !embeddingModelLocked && setRemoteEmbeddingModelId(event.target.value)
-                  }
-                  placeholder="text-embedding-3-small"
-                />
-              </div>
-            ) : null}
-
-            {embeddingModelLocked ? (
-              <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>该项目已经生成过向量索引，Embedding 模型已锁定。如需更换，请重建项目。</span>
-              </div>
-            ) : null}
 
             {editingProjectId ? (
               <>

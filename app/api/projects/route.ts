@@ -18,8 +18,6 @@ const postHandler = async (request: Request) => {
       name: body.name,
       description: body.description,
       storySearchProvider: body.storySearchProvider,
-      embeddingModelSource: body.embeddingModelSource,
-      embeddingModelId: body.embeddingModelId,
     });
 
     return NextResponse.json(project, { status: 201 });

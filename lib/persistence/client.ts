@@ -7,7 +7,6 @@ import {
 import {
   PersistedAiUsageRecord,
   PersistedAiUsageSnapshot,
-  LocalEmbeddingModelOption,
   MaterialImportInput,
   MaterialMarkerCreateInput,
   MaterialMarkerUpdateInput,
@@ -128,9 +127,30 @@ export const postAiUsageRecord = async (
 
 export const fetchAuthorizationSnapshot =
   async (): Promise<AuthorizationSnapshot> => {
-    const response = await assertOk(
-      await fetchWithDiagnostics("/api/device-identity", { cache: "no-store" })
-    );
+    const abortController = new AbortController();
+    const timeout = window.setTimeout(() => {
+      abortController.abort();
+    }, 5000);
+
+    let response: Response;
+
+    try {
+      response = await assertOk(
+        await fetchWithDiagnostics("/api/device-identity", {
+          cache: "no-store",
+          signal: abortController.signal,
+        })
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error("读取设备授权信息超时，请稍后重试。");
+      }
+
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+
     return (await response.json()) as AuthorizationSnapshot;
   };
 
@@ -283,24 +303,6 @@ export const putSettings = async (
   return (await response.json()) as PersistedAppSettings;
 };
 
-export const fetchLocalEmbeddingModels = async (
-  directory?: string
-): Promise<LocalEmbeddingModelOption[]> => {
-  const query = directory !== undefined
-    ? `?directory=${encodeURIComponent(directory)}`
-    : "";
-  const response = await assertOk(
-    await fetchWithDiagnostics(`/api/settings/local-embedding-models${query}`, {
-      cache: "no-store",
-    })
-  );
-  const payload = (await response.json()) as {
-    models?: LocalEmbeddingModelOption[];
-  };
-
-  return payload.models ?? [];
-};
-
 export const validateMediaToolExecutables = async (input: {
   ffmpegExecutablePath?: string;
   ffprobeExecutablePath?: string;
@@ -447,7 +449,7 @@ export const removeProject = async (id: string) => {
 
 export const indexMaterialOutline = async (
   id: string
-): Promise<{ indexedCount: number; mode: "embedding" | "keyword_only" | "empty" }> => {
+): Promise<{ indexedCount: number; mode: "keyword_only" | "empty" }> => {
   const response = await assertOk(
     await fetchWithDiagnostics(`/api/materials/${id}/outline-index`, {
       method: "POST",
@@ -456,7 +458,7 @@ export const indexMaterialOutline = async (
 
   return (await response.json()) as {
     indexedCount: number;
-    mode: "embedding" | "keyword_only" | "empty";
+    mode: "keyword_only" | "empty";
   };
 };
 
@@ -465,7 +467,7 @@ export const searchProjectStoryOutline = async (
   query: string,
   limit = 20
 ): Promise<{
-  mode: "embedding" | "keyword" | "llm";
+  mode: "keyword" | "llm";
   results: StoryOutlineSearchResult[];
 }> => {
   const response = await assertOk(
@@ -483,7 +485,7 @@ export const searchProjectStoryOutline = async (
   );
 
   return (await response.json()) as {
-    mode: "embedding" | "keyword" | "llm";
+    mode: "keyword" | "llm";
     results: StoryOutlineSearchResult[];
   };
 };

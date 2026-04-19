@@ -9,6 +9,7 @@ import {
   buildStoryOutlineUserPrompt,
 } from "@/lib/story-outline/prompt";
 import { storyOutlineResponseFormat } from "@/lib/ai/structured-output";
+import { getProviderDisplayName } from "@/lib/ai/provider-config";
 import { postAiUsageRecord } from "@/lib/persistence/client";
 import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
 
@@ -81,6 +82,7 @@ export const generateStoryOutline = async (
   config: StoryOutlineGenerationConfig
 ): Promise<StoryOutlineSceneRecord[]> => {
   const normalizedBaseUrl = config.baseUrl.replace(/\/+$/, "");
+  const provider = config.provider ?? "openai_compatible";
   const model = config.model ?? DEFAULT_OUTLINE_MODEL;
   const response = await fetch(`${normalizedBaseUrl}/chat/completions`, {
     method: "POST",
@@ -102,11 +104,12 @@ export const generateStoryOutline = async (
   if (!response.ok) {
     await recordUsage({
       action: "story_outline_generation",
-      provider: "openai_compatible",
+      provider,
       model,
       endpoint: `${normalizedBaseUrl}/chat/completions`,
       status: "error",
-      errorMessage: payload.error?.message || "AI 接口调用失败",
+      errorMessage:
+        payload.error?.message || `${getProviderDisplayName(provider)} 接口调用失败`,
       ...tokenUsage,
       inputCount: 1,
       materialId: config.materialId,
@@ -114,7 +117,9 @@ export const generateStoryOutline = async (
         mediaTitle: input.mediaTitle,
       },
     });
-    throw new Error(payload.error?.message || "AI 接口调用失败");
+    throw new Error(
+      payload.error?.message || `${getProviderDisplayName(provider)} 接口调用失败`
+    );
   }
 
   try {
@@ -125,7 +130,7 @@ export const generateStoryOutline = async (
     const normalizedScenes = normalizeSceneDrafts(rawScenes, srtTimelineBounds);
     await recordUsage({
       action: "story_outline_generation",
-      provider: "openai_compatible",
+      provider,
       model,
       endpoint: `${normalizedBaseUrl}/chat/completions`,
       status: "success",
@@ -142,7 +147,7 @@ export const generateStoryOutline = async (
   } catch (error) {
     await recordUsage({
       action: "story_outline_generation",
-      provider: "openai_compatible",
+      provider,
       model,
       endpoint: `${normalizedBaseUrl}/chat/completions`,
       status: "error",

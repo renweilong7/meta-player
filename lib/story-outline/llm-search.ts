@@ -1,5 +1,9 @@
 import { PersistedAppSettings } from "@/lib/persistence/types";
 import { storySearchResponseFormat } from "@/lib/ai/structured-output";
+import {
+  getProviderDisplayName,
+  resolveSearchModelProviderConfig,
+} from "@/lib/ai/provider-config";
 import { StoryOutlineSearchResult, StoryOutlineSearchSegment } from "@/lib/story-outline/search";
 import { safeRecordAiUsageEvent } from "@/lib/model-usage/service";
 import { extractOpenAiTokenUsage } from "@/lib/model-usage/usage";
@@ -258,12 +262,15 @@ const normalizeSearchResults = (
     .slice(0, limit);
 };
 
-const hasLlmSearchConfig = (settings: PersistedAppSettings) =>
-  Boolean(
-    settings.aiApiBaseUrl.trim() &&
-      settings.aiApiKey.trim() &&
-      (settings.aiSearchModelName.trim() || settings.aiModelName.trim())
+const hasLlmSearchConfig = (settings: PersistedAppSettings) => {
+  const providerConfig = resolveSearchModelProviderConfig(settings);
+
+  return Boolean(
+    providerConfig.baseUrl &&
+      providerConfig.apiKey &&
+      providerConfig.model
   );
+};
 
 const buildMessages = (
   query: string,
@@ -300,18 +307,15 @@ export const rankStorySegmentsWithLlm = async (input: {
     return [];
   }
 
-  const normalizedBaseUrl = input.settings.aiApiBaseUrl.replace(/\/+$/, "");
-  const response = await fetch(`${normalizedBaseUrl}/chat/completions`, {
+  const providerConfig = resolveSearchModelProviderConfig(input.settings);
+  const response = await fetch(`${providerConfig.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${input.settings.aiApiKey}`,
+      Authorization: `Bearer ${providerConfig.apiKey}`,
     },
     body: JSON.stringify({
-      model:
-        input.settings.aiSearchModelName.trim() ||
-        input.settings.aiModelName ||
-        DEFAULT_SEARCH_MODEL,
+      model: providerConfig.model || DEFAULT_SEARCH_MODEL,
       temperature: 0,
       response_format: storySearchResponseFormat,
       messages: buildMessages(input.query, candidates),
@@ -320,19 +324,18 @@ export const rankStorySegmentsWithLlm = async (input: {
 
   const payload = (await response.json()) as OpenAiChatCompletionResponse;
   const tokenUsage = extractOpenAiTokenUsage(payload);
-  const model =
-    input.settings.aiSearchModelName.trim() ||
-    input.settings.aiModelName ||
-    DEFAULT_SEARCH_MODEL;
+  const model = providerConfig.model || DEFAULT_SEARCH_MODEL;
+  const provider = providerConfig.provider;
+  const providerName = getProviderDisplayName(provider);
 
   if (!response.ok) {
     safeRecordAiUsageEvent({
       action: "story_outline_llm_search",
-      provider: "openai_compatible",
+      provider,
       model,
-      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      endpoint: `${providerConfig.baseUrl}/chat/completions`,
       status: "error",
-      errorMessage: payload.error?.message || "大模型搜索接口调用失败",
+      errorMessage: payload.error?.message || `${providerName} 大模型搜索接口调用失败`,
       inputTokens: tokenUsage.inputTokens,
       outputTokens: tokenUsage.outputTokens,
       totalTokens: tokenUsage.totalTokens,
@@ -342,7 +345,7 @@ export const rankStorySegmentsWithLlm = async (input: {
         queryLength: input.query.length,
       },
     });
-    throw new Error(payload.error?.message || "大模型搜索接口调用失败");
+    throw new Error(payload.error?.message || `${providerName} 大模型搜索接口调用失败`);
   }
 
   try {
@@ -352,9 +355,9 @@ export const rankStorySegmentsWithLlm = async (input: {
 
     safeRecordAiUsageEvent({
       action: "story_outline_llm_search",
-      provider: "openai_compatible",
+      provider,
       model,
-      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      endpoint: `${providerConfig.baseUrl}/chat/completions`,
       status: "success",
       inputTokens: tokenUsage.inputTokens,
       outputTokens: tokenUsage.outputTokens,
@@ -371,9 +374,9 @@ export const rankStorySegmentsWithLlm = async (input: {
   } catch (error) {
     safeRecordAiUsageEvent({
       action: "story_outline_llm_search",
-      provider: "openai_compatible",
+      provider,
       model,
-      endpoint: `${normalizedBaseUrl}/chat/completions`,
+      endpoint: `${providerConfig.baseUrl}/chat/completions`,
       status: "error",
       errorMessage:
         error instanceof Error ? error.message : "大模型搜索结果解析失败",

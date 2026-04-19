@@ -1,33 +1,18 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { createServerLogger, formatErrorForLog } from "@/lib/observability/logger";
-import {
-  getAppDataDirectory,
-  resolveBundledSqliteVecPath,
-} from "@/lib/runtime/resource-paths";
+import { createServerLogger } from "@/lib/observability/logger";
+import { getAppDataDirectory } from "@/lib/runtime/resource-paths";
 
-/**
- * 统一管理应用内部数据目录。
- *
- * 这里把数据库和默认素材目录都放在工作区下，原因有两个：
- * 1. 当前开发环境对工作区写入最稳定。
- * 2. Electron/Next 本地开发时不依赖额外系统目录权限。
- */
 const APP_DATA_DIRECTORY = getAppDataDirectory();
 const DATABASE_PATH = join(APP_DATA_DIRECTORY, "meta-player.db");
 const DEFAULT_MATERIAL_DIRECTORY = join(APP_DATA_DIRECTORY, "materials");
-const SQLITE_VEC_PATH_ENV = "META_PLAYER_SQLITE_VEC_PATH";
-const SQLITE_VEC_TABLE_PREFIX = "outline_segment_vec_";
+const LEGACY_VECTOR_TABLE_PREFIX = "outline_segment_vec_";
 const logger = createServerLogger("server", {
   component: "database",
 });
 
 let databaseInstance: DatabaseSync | null = null;
-let sqliteVecExtensionLoaded = false;
-let sqliteVecExtensionPath: string | null = null;
-let sqliteVecLoadError: string | null = null;
-const ensuredVectorTableDimensions = new Set<number>();
 
 const ensureAppDataDirectory = () => {
   mkdirSync(APP_DATA_DIRECTORY, { recursive: true });
@@ -38,61 +23,82 @@ const ensureAppDataDirectory = () => {
   });
 };
 
-const getSqliteVecFilename = () => {
-  switch (process.platform) {
-    case "darwin":
-      return "vec0.dylib";
-    case "win32":
-      return "vec0.dll";
-    default:
-      return "vec0.so";
-  }
-};
+const purgeLegacyVectorSchema = (database: DatabaseSync) => {
+  const legacyEntries = database
+    .prepare(
+      `
+        SELECT type, name, sql
+        FROM sqlite_master
+        WHERE name LIKE ?
+           OR (sql IS NOT NULL AND sql LIKE '%USING vec0(%')
+        ORDER BY type ASC, name ASC
+      `
+    )
+    .all(`${LEGACY_VECTOR_TABLE_PREFIX}%`) as Array<{
+      type: string;
+      name: string;
+      sql: string | null;
+    }>;
 
-const getSqliteVecCandidatePaths = () => {
-  const resolvedPath = resolveBundledSqliteVecPath(getSqliteVecFilename());
-  return resolvedPath ? [resolvedPath] : [];
-};
-
-const loadSqliteVecExtension = (database: DatabaseSync) => {
-  const extensionPath = getSqliteVecCandidatePaths().find((candidate) =>
-    existsSync(candidate)
-  );
-
-  if (!extensionPath) {
-    sqliteVecLoadError = `${SQLITE_VEC_PATH_ENV} 未设置，且默认目录中未找到 sqlite-vec 扩展。`;
-    logger.warn("database.sqlite_vec.unavailable", {
-      error: sqliteVecLoadError,
-    });
+  if (legacyEntries.length === 0) {
     return;
   }
 
-  try {
-    database.loadExtension(extensionPath);
-    sqliteVecExtensionLoaded = true;
-    sqliteVecExtensionPath = extensionPath;
-    sqliteVecLoadError = null;
-    logger.info("database.sqlite_vec.loaded", {
-      extensionPath,
-    });
-  } catch (error) {
-    sqliteVecExtensionLoaded = false;
-    sqliteVecExtensionPath = extensionPath;
-    sqliteVecLoadError =
-      error instanceof Error ? error.message : "sqlite-vec 扩展加载失败。";
-    logger.error("database.sqlite_vec.load_failed", {
-      extensionPath,
-      error: formatErrorForLog(error),
-    });
+  logger.warn("database.legacy_vector_schema_detected", {
+    names: legacyEntries.map((entry) => entry.name),
+  });
+
+  const mainVirtualTables = legacyEntries.filter(
+    (entry) => entry.sql?.includes("USING vec0(") && entry.type === "table"
+  );
+
+  let needsWritableSchemaFallback = mainVirtualTables.length > 0;
+
+  for (const entry of legacyEntries) {
+    if (entry.type !== "table") {
+      continue;
+    }
+
+    try {
+      database.exec(`DROP TABLE IF EXISTS "${entry.name.replaceAll("\"", "\"\"")}"`);
+    } catch (error) {
+      needsWritableSchemaFallback = true;
+      logger.warn("database.legacy_vector_schema_drop_failed", {
+        name: entry.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      break;
+    }
   }
+
+  if (!needsWritableSchemaFallback) {
+    return;
+  }
+
+  const currentSchemaVersionRow = database
+    .prepare("PRAGMA schema_version")
+    .get() as { schema_version: number };
+  const nextSchemaVersion = (currentSchemaVersionRow?.schema_version ?? 0) + 1;
+
+  database.exec("PRAGMA writable_schema = ON");
+  database
+    .prepare(
+      `
+        DELETE FROM sqlite_master
+        WHERE name LIKE ?
+           OR (sql IS NOT NULL AND sql LIKE '%USING vec0(%')
+      `
+    )
+    .run(`${LEGACY_VECTOR_TABLE_PREFIX}%`);
+  database.exec("PRAGMA writable_schema = OFF");
+  database.exec(`PRAGMA schema_version = ${nextSchemaVersion}`);
+  database.exec("VACUUM");
+
+  logger.info("database.legacy_vector_schema_purged", {
+    names: legacyEntries.map((entry) => entry.name),
+  });
 };
 
-/**
- * 初始化 SQLite schema。
- *
- * 这里不用迁移框架，原因是当前 schema 还很小，直接在启动时执行
- * `CREATE TABLE IF NOT EXISTS` 可读性更高，也更方便先把持久化跑通。
- */
 const initializeSchema = (database: DatabaseSync) => {
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -143,12 +149,6 @@ const initializeSchema = (database: DatabaseSync) => {
       end_seconds INTEGER NOT NULL,
       timestamp_text TEXT NOT NULL,
       searchable_text TEXT NOT NULL,
-      embedding_json TEXT,
-      embedding_model TEXT,
-      embedding_status TEXT NOT NULL DEFAULT 'idle' CHECK (
-        embedding_status IN ('idle', 'loading', 'success', 'error')
-      ),
-      embedding_error TEXT,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE
     );
@@ -173,10 +173,7 @@ const initializeSchema = (database: DatabaseSync) => {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       description TEXT,
-      story_search_provider TEXT NOT NULL DEFAULT 'remote_embedding',
-      embedding_model_source TEXT NOT NULL DEFAULT 'remote',
-      embedding_model_id TEXT NOT NULL DEFAULT 'text-embedding-3-small',
-      embedding_model_locked INTEGER NOT NULL DEFAULT 0,
+      story_search_provider TEXT NOT NULL DEFAULT 'keyword',
       cross_asset_switch_mode TEXT NOT NULL DEFAULT 'frame_hold',
       auto_trim_intro_outro INTEGER NOT NULL DEFAULT 0,
       intro_trim_seconds REAL NOT NULL DEFAULT 0,
@@ -261,16 +258,10 @@ const initializeSchema = (database: DatabaseSync) => {
     CREATE INDEX IF NOT EXISTS idx_ai_usage_event_action_created_at ON ai_usage_event(action, created_at DESC);
   `);
 
-  /**
-   * 轻量 schema 迁移：
-   * 旧库没有 `storage_mode`，这里在启动时补齐，默认把历史数据视为托管文件。
-   */
-  const columns = database
+  const assetColumns = database
     .prepare("PRAGMA table_info(asset)")
     .all() as Array<{ name: string }>;
-  const hasStorageModeColumn = columns.some((column) => column.name === "storage_mode");
-
-  if (!hasStorageModeColumn) {
+  if (!assetColumns.some((column) => column.name === "storage_mode")) {
     database.exec(`
       ALTER TABLE asset
       ADD COLUMN storage_mode TEXT NOT NULL DEFAULT 'managed'
@@ -289,24 +280,28 @@ const initializeSchema = (database: DatabaseSync) => {
     database.exec(`ALTER TABLE project ADD COLUMN ${name} ${definition}`);
   };
 
-  ensureProjectColumn("script_srt_content", "TEXT");
-  ensureProjectColumn("story_search_provider", "TEXT NOT NULL DEFAULT 'remote_embedding'");
-  ensureProjectColumn("embedding_model_source", "TEXT NOT NULL DEFAULT 'remote'");
-  ensureProjectColumn("embedding_model_id", "TEXT NOT NULL DEFAULT 'text-embedding-3-small'");
-  ensureProjectColumn("embedding_model_locked", "INTEGER NOT NULL DEFAULT 0");
+  ensureProjectColumn("story_search_provider", "TEXT NOT NULL DEFAULT 'keyword'");
   ensureProjectColumn("cross_asset_switch_mode", "TEXT NOT NULL DEFAULT 'frame_hold'");
   ensureProjectColumn("auto_trim_intro_outro", "INTEGER NOT NULL DEFAULT 0");
   ensureProjectColumn("intro_trim_seconds", "REAL NOT NULL DEFAULT 0");
   ensureProjectColumn("outro_trim_seconds", "REAL NOT NULL DEFAULT 0");
+  ensureProjectColumn("script_srt_content", "TEXT");
   ensureProjectColumn("script_match_results_json", "TEXT");
   ensureProjectColumn("script_audio_filename", "TEXT");
   ensureProjectColumn("script_audio_path", "TEXT");
   ensureProjectColumn("script_audio_size", "INTEGER");
 
+  database.exec(`
+    UPDATE project
+    SET story_search_provider = 'keyword'
+    WHERE story_search_provider IN ('remote_embedding', 'local_embedding')
+       OR story_search_provider IS NULL
+       OR TRIM(story_search_provider) = ''
+  `);
+
   const projectClipColumns = database
     .prepare("PRAGMA table_info(project_clip)")
     .all() as Array<{ name: string }>;
-
   if (
     projectClipColumns.length > 0 &&
     !projectClipColumns.some((column) => column.name === "script_content")
@@ -314,100 +309,7 @@ const initializeSchema = (database: DatabaseSync) => {
     database.exec("ALTER TABLE project_clip ADD COLUMN script_content TEXT NOT NULL DEFAULT ''");
   }
 
-  if (sqliteVecExtensionLoaded) {
-    const legacyVectorTables = (
-      database
-        .prepare(
-          `
-            SELECT name, sql
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name LIKE ?
-              AND sql IS NOT NULL
-              AND sql LIKE '%USING vec0%'
-            ORDER BY name ASC
-          `
-        )
-        .all(`${SQLITE_VEC_TABLE_PREFIX}%`) as Array<{ name: string; sql: string }>
-    ).filter(
-      (row) =>
-        !row.sql.includes("embedding_model") || !row.sql.includes("start_seconds FLOAT")
-    );
-
-    for (const table of legacyVectorTables) {
-      database.exec(`DROP TABLE IF EXISTS ${table.name}`);
-    }
-  }
-};
-
-const normalizeVectorDimension = (dimension: number) => {
-  if (!Number.isInteger(dimension) || dimension <= 0) {
-    throw new Error("向量维度必须为正整数。");
-  }
-
-  return dimension;
-};
-
-export const getOutlineVectorTableName = (dimension: number) =>
-  `${SQLITE_VEC_TABLE_PREFIX}${normalizeVectorDimension(dimension)}`;
-
-export const listOutlineVectorTableNames = () => {
-  const database = getDatabase();
-
-  return (
-    database
-      .prepare(
-        `
-          SELECT name
-          FROM sqlite_master
-          WHERE type = 'table'
-            AND name LIKE ?
-            AND sql IS NOT NULL
-            AND sql LIKE '%USING vec0%'
-          ORDER BY name ASC
-        `
-      )
-      .all(`${SQLITE_VEC_TABLE_PREFIX}%`) as Array<{ name: string }>
-  ).map((row) => row.name);
-};
-
-export const isSqliteVecAvailable = () => sqliteVecExtensionLoaded;
-
-export const getSqliteVecStatus = () => ({
-  available: sqliteVecExtensionLoaded,
-  extensionPath: sqliteVecExtensionPath,
-  error: sqliteVecLoadError,
-});
-
-export const ensureOutlineVectorTable = (dimension: number) => {
-  const normalizedDimension = normalizeVectorDimension(dimension);
-
-  if (!sqliteVecExtensionLoaded) {
-    return false;
-  }
-
-  if (ensuredVectorTableDimensions.has(normalizedDimension)) {
-    return true;
-  }
-
-  const database = getDatabase();
-  const tableName = getOutlineVectorTableName(normalizedDimension);
-
-  database.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS ${tableName}
-    USING vec0(
-      project_id TEXT PARTITION KEY,
-      asset_id TEXT,
-      segment_id TEXT,
-      embedding_model TEXT,
-      start_seconds FLOAT,
-      embedding FLOAT[${normalizedDimension}] DISTANCE_METRIC=cosine
-    )
-  `);
-
-  ensuredVectorTableDimensions.add(normalizedDimension);
-
-  return true;
+  purgeLegacyVectorSchema(database);
 };
 
 export const getDatabase = () => {
@@ -416,12 +318,11 @@ export const getDatabase = () => {
   }
 
   ensureAppDataDirectory();
-  databaseInstance = new DatabaseSync(DATABASE_PATH, {
-    allowExtension: true,
-  });
-  loadSqliteVecExtension(databaseInstance);
+  databaseInstance = new DatabaseSync(DATABASE_PATH);
   initializeSchema(databaseInstance);
-  databaseInstance.enableLoadExtension(false);
+  logger.info("database.ready", {
+    databasePath: DATABASE_PATH,
+  });
 
   return databaseInstance;
 };

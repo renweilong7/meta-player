@@ -75,6 +75,7 @@ export interface StoryOutlineGenerationInput {
  * 自定义模型名或超参数，可以再扩展。
  */
 export interface StoryOutlineGenerationConfig {
+  provider?: "openai_compatible" | "grok2api";
   baseUrl: string;
   apiKey: string;
   model?: string;

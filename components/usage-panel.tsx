@@ -35,8 +35,6 @@ const PAGE_SIZE = 20;
 
 const actionLabels: Record<PersistedAiUsageRecord["action"], string> = {
   story_outline_generation: "剧情大纲",
-  story_outline_embedding_index: "剧情索引",
-  story_outline_embedding_search: "剧情检索向量",
   story_outline_llm_search: "剧情检索重排",
   scene_shot_analysis: "镜头解读",
   project_script_tts: "文案 TTS",
@@ -44,8 +42,8 @@ const actionLabels: Record<PersistedAiUsageRecord["action"], string> = {
 
 const providerLabels: Record<PersistedAiUsageRecord["provider"], string> = {
   openai_compatible: "OpenAI 兼容",
+  grok2api: "grok2api",
   dashscope: "DashScope",
-  local_embedding: "本地 Embedding",
   system_tts: "系统 TTS",
 };
 

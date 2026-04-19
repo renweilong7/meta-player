@@ -444,13 +444,13 @@ export const assertLicensedFeature = (featureKey: LicenseFeatureKey) => {
  *
  * 当前策略：
  * - 已授权：放行用户选择的搜索方案。
- * - 未授权：统一退回默认远端 Embedding 方案，避免进入业务能力页面。
+ * - 未授权：统一退回关键词检索，避免高级搜索能力进入未授权状态。
  */
 export const resolveSearchProviderByLicense = (
   requestedProvider: StorySearchProvider
 ): StorySearchProvider => {
   if (!hasLicensedFeature("pro.search_advanced")) {
-    return "remote_embedding";
+    return "keyword";
   }
 
   return requestedProvider;

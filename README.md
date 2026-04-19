@@ -50,7 +50,6 @@ Meta Player 是一款面向本地视频素材整理、剧情理解与片段定�
 ### 剧情检索
 
 - 支持关键词检索剧情片段
-- 支持远端 Embedding 检索
 - 支持大模型搜索/排序
 - 支持搜索结果一键跳转到对应视频时间
 
@@ -85,7 +84,6 @@ Meta Player 是一款面向本地视频素材整理、剧情理解与片段定�
 
 - 图片素材目前只参与管理，不在播放器面板内预览
 - 场景编辑和场景排序仍是 UI 预留
-- 本地 Embedding 模型能力尚未真正打通
 - 视频编辑、导出等高级工作流仍在规划中
 
 ## 授权模型
@@ -134,12 +132,6 @@ Meta Player 当前采用基础授权与高级授权两档能力分层。
 npm install
 ```
 
-如果要启用本地 Embedding 模型推理，开发环境仍需要准备 Python 依赖：
-
-```bash
-pip install -r requirements-local-embedding.txt
-```
-
 ### 启动开发环境
 
 ```bash
@@ -148,38 +140,10 @@ npm run electron:dev
 
 这个命令会同时启动 Next.js 开发服务和 Electron 桌面应用。
 
-如果要启用 `sqlite-vec` 本地向量检索，请先把对应平台的动态库放到仓库内：
-
-```text
-bin/sqlite-vec/darwin-arm64/vec0.dylib
-bin/sqlite-vec/darwin-x64/vec0.dylib
-bin/sqlite-vec/linux-x64/vec0.so
-bin/sqlite-vec/win32-x64/vec0.dll
-```
-
-开发环境也可以用环境变量覆盖默认路径：
-
-```bash
-META_PLAYER_SQLITE_VEC_PATH=/absolute/path/to/vec0.dylib npm run electron:dev
-```
-
-本地 Embedding 模型请放在设置页指定的“本地 Embedding 模型目录”下，应用会扫描该目录下的一级子目录。
-打包版默认建议放到应用数据目录中的：
-
-```text
-.meta-player/models/embeddings/<model-name>/
-```
-
 ### 构建应用
 
 ```bash
 npm run package:app
-```
-
-如需构建 Windows NVIDIA GPU 版的本地 Embedding 运行环境，可执行：
-
-```bash
-npm run package:app:gpu
 ```
 
 ## 打包
@@ -190,28 +154,17 @@ npm run package:app:gpu
 
 - 已安装 Node.js
 - 已安装 Python 3，且 `py -3` 可用
-- 若打 GPU 包，目标机器需面向 NVIDIA CUDA 12.4 环境
 
-CPU 版安装包：
+安装包构建命令：
 
 ```bash
 npm install
 npm run dist:win
 ```
 
-GPU 版安装包：
-
-```bash
-npm install
-npm run dist:win:gpu
-```
-
 说明：
 
-- `dist:win` 会自动准备 CPU 版 Python runtime、构建前端、整理产物并生成 Windows 安装包
-- `dist:win:gpu` 会使用独立的 GPU Python runtime，并生成单独的 GPU 安装包
-- GPU 包当前面向 Windows NVIDIA CUDA 12.4，不适合通用发给所有 Windows 用户
-- CPU 与 GPU 包会分别输出到不同目录，避免相互覆盖
+- `dist:win` 会自动准备 Python runtime、构建前端、整理产物并生成 Windows 安装包
 
 ### macOS
 
@@ -230,8 +183,7 @@ npm run dist:mac
 - 页面外链优先交给系统默认浏览器打开
 - 生产环境关闭 `nodeIntegration`，开启 `contextIsolation`
 
-打包时会把 `bin/sqlite-vec/` 对应平台的动态库、内置 Python 运行环境和 Python 脚本一起带入应用产物。
-CPU 打包会生成 `.python-runtime/`，GPU 打包会生成 `.python-runtime-gpu/`，随后再把对应运行时打进安装包。
+打包时会把内置 Python 运行环境和 Python 脚本一起带入应用产物。
 
 ## 目录结构
 

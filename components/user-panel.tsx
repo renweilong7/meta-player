@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 
 interface UserPanelProps {
   authorization?: AuthorizationSnapshot | null;
+  authorizationError?: string | null;
   isRefreshingAuthorization?: boolean;
   isExportingDiagnostics?: boolean;
   onRefreshAuthorization?: () => void | Promise<void>;
@@ -30,6 +31,7 @@ interface UserPanelProps {
 
 export function UserPanel({
   authorization = null,
+  authorizationError = null,
   isRefreshingAuthorization = false,
   isExportingDiagnostics = false,
   onRefreshAuthorization,
@@ -115,9 +117,33 @@ export function UserPanel({
             </CardHeader>
             <CardContent className="pt-6">
               {!authorization ? (
-                <div className="rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
-                  正在加载设备授权信息...
-                </div>
+                authorizationError ? (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-5">
+                    <p className="text-sm text-foreground">设备授权信息加载失败</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {authorizationError}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-4"
+                      onClick={() => void onRefreshAuthorization?.()}
+                      disabled={isRefreshingAuthorization}
+                    >
+                      <RefreshCw
+                        className={
+                          isRefreshingAuthorization ? "h-4 w-4 animate-spin" : "h-4 w-4"
+                        }
+                      />
+                      {isRefreshingAuthorization ? "重试中..." : "重新加载"}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
+                    正在加载设备授权信息...
+                  </div>
+                )
               ) : (
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">

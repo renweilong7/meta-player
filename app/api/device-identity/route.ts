@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 const getHandler = async () => {
   return NextResponse.json(
     await getAuthorizationSnapshot({
-      forceSync: true,
+      forceSync: false,
     })
   );
 };

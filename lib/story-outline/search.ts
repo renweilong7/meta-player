@@ -19,8 +19,6 @@ export interface StoryOutlineSearchSegment {
   timestamp: string;
   shotAnalysisText?: string;
   searchableText: string;
-  embedding?: number[];
-  embeddingModel?: string | null;
 }
 
 export interface StoryOutlineSearchResult extends StoryOutlineSearchSegment {
@@ -126,26 +124,4 @@ export const searchStoryOutlineSegments = (
       return left.startSeconds - right.startSeconds;
     })
     .slice(0, limit);
-};
-
-export const cosineSimilarity = (left: number[], right: number[]) => {
-  if (left.length === 0 || right.length === 0 || left.length !== right.length) {
-    return -1;
-  }
-
-  let dotProduct = 0;
-  let leftNorm = 0;
-  let rightNorm = 0;
-
-  for (let index = 0; index < left.length; index += 1) {
-    dotProduct += left[index] * right[index];
-    leftNorm += left[index] * left[index];
-    rightNorm += right[index] * right[index];
-  }
-
-  if (leftNorm === 0 || rightNorm === 0) {
-    return -1;
-  }
-
-  return dotProduct / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
 };

@@ -20,7 +20,6 @@ const standaloneStaticRoot = join(standaloneRoot, ".next", "static");
 const buildStaticRoot = join(projectRoot, ".next", "static");
 const publicRoot = join(projectRoot, "public");
 const scriptsRoot = join(projectRoot, "scripts");
-const sqliteVecRoot = join(projectRoot, "bin", "sqlite-vec");
 const pythonRuntimeRoot = resolve(
   process.env.META_PLAYER_PYTHON_RUNTIME_PATH?.trim() || join(projectRoot, ".python-runtime")
 );
@@ -279,10 +278,6 @@ if (existsSync(scriptsRoot)) {
         pythonExecutablePath: pythonRuntimeExecutablePath,
       });
     });
-}
-
-if (existsSync(sqliteVecRoot)) {
-  cpSync(sqliteVecRoot, join(distRoot, "sqlite-vec"), { recursive: true });
 }
 
 cpSync(pythonRuntimeRoot, join(distRoot, "python"), {

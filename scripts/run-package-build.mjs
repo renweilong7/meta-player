@@ -1,14 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
-const rawArguments = process.argv.slice(2);
-const flavorIndex = rawArguments.indexOf("--flavor");
-const buildFlavor =
-  flavorIndex >= 0 && rawArguments[flavorIndex + 1] ? rawArguments[flavorIndex + 1] : "cpu";
 
 const buildEnvironment = {
   ...process.env,
@@ -19,15 +15,6 @@ const buildNodeOptions = [
 ]
   .filter((entry) => entry && entry.length > 0)
   .join(" ");
-
-if (buildFlavor === "gpu") {
-  buildEnvironment.META_PLAYER_PYTHON_FLAVOR = "gpu";
-  buildEnvironment.META_PLAYER_PYTHON_RUNTIME_PATH = join(projectRoot, ".python-runtime-gpu");
-  buildEnvironment.META_PLAYER_PYTHON_REQUIREMENTS_PATH = join(
-    projectRoot,
-    "requirements-local-embedding-gpu-cu124.txt"
-  );
-}
 
 const runOrThrow = (command, args, options = {}) => {
   const result = spawnSync(command, args, {

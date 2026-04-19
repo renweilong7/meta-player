@@ -14,15 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import {
-  ensureOutlineVectorTable,
   getDatabase,
   getDefaultMaterialDirectory,
-  getOutlineVectorTableName,
-  isSqliteVecAvailable,
-  listOutlineVectorTableNames,
 } from "@/lib/persistence/database";
 import {
-  getDefaultLocalEmbeddingModelDirectory,
   resolveFfmpegExecutable,
   resolveFfprobeExecutable,
 } from "@/lib/runtime/resource-paths";
@@ -35,8 +30,6 @@ import {
   PersistedAiUsageSnapshot,
   PersistedAiUsageSummary,
   MaterialPatchInput,
-  OutlineVectorSearchSupport,
-  ProjectEmbeddingModelSource,
   PersistedAppSettings,
   PersistedLibrarySnapshot,
   PersistedMaterial,
@@ -56,25 +49,28 @@ import {
   StoryOutlineSearchResult,
   StoryOutlineSearchSegment,
 } from "@/lib/story-outline/search";
-import { resolveLocalEmbeddingModel } from "@/lib/story-outline/local-embedding";
 import { combineProjectScriptState } from "@/lib/project-script/srt";
+import { resolveTextModelProviderConfig } from "@/lib/ai/provider-config";
 
 const SETTINGS_DEFAULTS: PersistedAppSettings = {
   materialSavePath: getDefaultMaterialDirectory(),
   defaultManagedImport: false,
   ffmpegExecutablePath: "",
   ffprobeExecutablePath: "",
-  aiApiBaseUrl: "https://api.openai.com/v1",
-  aiApiKey: "",
-  aiModelName: "gpt-4o-mini",
+  aiTextProvider: "openai_compatible",
+  openaiApiBaseUrl: "https://api.openai.com/v1",
+  openaiApiKey: "",
+  grok2apiBaseUrl:
+    process.env.META_PLAYER_GROK2API_BASE_URL?.trim() || "http://127.0.0.1:8000/v1",
+  grok2apiApiKey: "",
+  openaiTextModelName: "gpt-4o-mini",
+  grok2apiTextModelName: "grok-2-latest",
   aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
   aiVisionApiKey: "",
   aiVisionModelName: "qwen3.6-plus",
   aiVisionFps: "2",
-  storySearchProvider: "remote_embedding",
-  aiEmbeddingModelName: "text-embedding-3-small",
-  localEmbeddingModelDirectory: getDefaultLocalEmbeddingModelDirectory(),
-  localEmbeddingModelName: "bge-small-zh",
+  storySearchProvider: "keyword",
+  aiSearchProvider: "openai_compatible",
   aiSearchModelName: "gpt-4o-mini",
   localTtsModelName: "Tingting",
   autoGenerateProjectScriptTts: true,
@@ -110,9 +106,6 @@ type ProjectRow = {
   name: string;
   description: string | null;
   story_search_provider: PersistedProject["storySearchProvider"];
-  embedding_model_source: ProjectEmbeddingModelSource;
-  embedding_model_id: string;
-  embedding_model_locked: number;
   cross_asset_switch_mode: CrossAssetSwitchMode;
   auto_trim_intro_outro: number;
   intro_trim_seconds: number;
@@ -138,25 +131,7 @@ type OutlineSegmentRow = {
   end_seconds: number;
   timestamp_text: string;
   searchable_text: string;
-  embedding_json: string | null;
-  embedding_model: string | null;
-  embedding_status: "idle" | "loading" | "success" | "error";
-  embedding_error: string | null;
   updated_at: string;
-};
-
-type OutlineVectorCandidateRow = {
-  segment_id: string;
-  distance: number;
-};
-
-type OutlineVectorRecord = {
-  projectId: string;
-  assetId: string;
-  segmentId: string;
-  embeddingModel: string;
-  startSeconds: number;
-  embedding: number[];
 };
 
 type ProjectScriptItemRow = {
@@ -330,23 +305,6 @@ const parseMarkerJson = (raw: string | null): PersistedMaterialMarker[] | undefi
   }
 };
 
-const parseEmbeddingJson = (raw: string | null): number[] | undefined => {
-  if (!raw) {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as number[];
-    if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "number")) {
-      return undefined;
-    }
-
-    return parsed;
-  } catch {
-    return undefined;
-  }
-};
-
 const parseAiUsageMetadata = (
   raw: string | null
 ): PersistedAiUsageRecord["metadata"] | undefined => {
@@ -426,24 +384,6 @@ const enrichAiUsageRecords = (records: PersistedAiUsageRecord[]): PersistedAiUsa
       sourceDetail: sourceDetail || null,
     };
   });
-};
-
-const groupOutlineVectorRecordsByDimension = (records: OutlineVectorRecord[]) => {
-  const groups = new Map<number, OutlineVectorRecord[]>();
-
-  for (const record of records) {
-    const dimension = record.embedding.length;
-    const existing = groups.get(dimension);
-
-    if (existing) {
-      existing.push(record);
-      continue;
-    }
-
-    groups.set(dimension, [record]);
-  }
-
-  return groups;
 };
 
 const getMaterialFileUrl = (id: string) => `/api/materials/${id}/file`;
@@ -572,10 +512,7 @@ const mapRowToProject = (row: ProjectRow): PersistedProject => ({
   name: row.name,
   description: row.description ?? undefined,
   materialIds: parseProjectMaterialIds(row.material_ids_json),
-  storySearchProvider: row.story_search_provider ?? "remote_embedding",
-  embeddingModelSource: row.embedding_model_source ?? "remote",
-  embeddingModelId: row.embedding_model_id,
-  embeddingModelLocked: row.embedding_model_locked === 1,
+  storySearchProvider: row.story_search_provider === "llm" ? "llm" : "keyword",
   crossAssetSwitchMode: row.cross_asset_switch_mode ?? "frame_hold",
   autoTrimIntroOutro: row.auto_trim_intro_outro === 1,
   introTrimSeconds: normalizeTrimSeconds(row.intro_trim_seconds),
@@ -602,8 +539,6 @@ const mapRowToOutlineSegment = (
   endSeconds: row.end_seconds,
   timestamp: row.timestamp_text,
   searchableText: row.searchable_text,
-  embedding: parseEmbeddingJson(row.embedding_json),
-  embeddingModel: row.embedding_model,
 });
 
 const ensureDirectory = (directory: string) => {
@@ -754,59 +689,9 @@ const runInTransaction = (callback: () => void) => {
   }
 };
 
-const getOutlineVectorSearchSupportInternal = (): OutlineVectorSearchSupport => {
-  if (!isSqliteVecAvailable()) {
-    return {
-      available: false,
-      mode: "keyword_fallback",
-      reason: "sqlite_vec_unavailable",
-    };
-  }
-
-  return {
-    available: true,
-    mode: "sqlite_vec",
-    reason: null,
-  };
-};
-
-const normalizeProjectEmbeddingConfig = (input: {
-  storySearchProvider: PersistedProject["storySearchProvider"];
-  embeddingModelSource: ProjectEmbeddingModelSource;
-  embeddingModelId: string;
-}) => {
-  const embeddingModelId = input.embeddingModelId.trim();
-  if (!embeddingModelId) {
-    throw new Error("项目 Embedding 模型不能为空。");
-  }
-
-  if (input.storySearchProvider === "local_embedding") {
-    const resolved = resolveLocalEmbeddingModel({
-      localEmbeddingModelDirectory: getSettings().localEmbeddingModelDirectory,
-      localEmbeddingModelName: embeddingModelId,
-    });
-
-    return {
-      storySearchProvider: input.storySearchProvider,
-      embeddingModelSource: "local" as const,
-      embeddingModelId: resolved.id,
-    };
-  }
-
-  if (input.storySearchProvider === "remote_embedding") {
-    return {
-      storySearchProvider: input.storySearchProvider,
-      embeddingModelSource: "remote" as const,
-      embeddingModelId,
-    };
-  }
-
-  return {
-    storySearchProvider: input.storySearchProvider,
-    embeddingModelSource: input.embeddingModelSource,
-    embeddingModelId,
-  };
-};
+const normalizeProjectSearchProvider = (
+  provider: PersistedProject["storySearchProvider"]
+): PersistedProject["storySearchProvider"] => (provider === "llm" ? "llm" : "keyword");
 
 export const listProjectIdsByAssetId = (assetId: string) => {
   const database = getDatabase();
@@ -823,184 +708,6 @@ export const listProjectIdsByAssetId = (assetId: string) => {
   ).map((row) => row.project_id);
 };
 
-export const lockProjectEmbeddingConfigByAssetId = (assetId: string) => {
-  const database = getDatabase();
-  const now = toIsoNow();
-
-  database.prepare(`
-    UPDATE project
-    SET embedding_model_locked = 1,
-        updated_at = ?
-    WHERE id IN (
-      SELECT project_id
-      FROM project_asset
-      WHERE asset_id = ?
-    )
-  `).run(now, assetId);
-};
-
-export const lockProjectEmbeddingConfig = (projectId: string) => {
-  const database = getDatabase();
-  const now = toIsoNow();
-
-  database.prepare(`
-    UPDATE project
-    SET embedding_model_locked = 1,
-        updated_at = ?
-    WHERE id = ?
-  `).run(now, projectId);
-};
-
-const deleteOutlineVectorRowsByColumn = (
-  column: "asset_id" | "project_id" | "segment_id",
-  value: string
-) => {
-  if (!isSqliteVecAvailable()) {
-    return;
-  }
-
-  const database = getDatabase();
-
-  for (const tableName of listOutlineVectorTableNames()) {
-    database.prepare(`DELETE FROM ${tableName} WHERE ${column} = ?`).run(value);
-  }
-};
-
-const insertOutlineVectorRecords = (records: OutlineVectorRecord[]) => {
-  if (!isSqliteVecAvailable() || records.length === 0) {
-    return 0;
-  }
-
-  const database = getDatabase();
-  let insertedCount = 0;
-
-  for (const [dimension, groupedRecords] of groupOutlineVectorRecordsByDimension(records)) {
-    ensureOutlineVectorTable(dimension);
-    const tableName = getOutlineVectorTableName(dimension);
-    const insertStatement = database.prepare(`
-      INSERT INTO ${tableName} (
-        project_id,
-        asset_id,
-        segment_id,
-        embedding_model,
-        start_seconds,
-        embedding
-      ) VALUES (?, ?, ?, ?, ?, vec_f32(?))
-    `);
-
-    for (const record of groupedRecords) {
-      insertStatement.run(
-        record.projectId,
-        record.assetId,
-        record.segmentId,
-        record.embeddingModel,
-        record.startSeconds,
-        JSON.stringify(record.embedding)
-      );
-      insertedCount += 1;
-    }
-  }
-
-  return insertedCount;
-};
-
-export const replaceProjectOutlineVectorsForSegment = (input: {
-  projectId: string;
-  assetId: string;
-  segmentId: string;
-  embeddingModel: string;
-  startSeconds: number;
-  embedding: number[];
-}) => {
-  if (!isSqliteVecAvailable()) {
-    return 0;
-  }
-
-  let insertedCount = 0;
-
-  runInTransaction(() => {
-    const database = getDatabase();
-
-    for (const tableName of listOutlineVectorTableNames()) {
-      database
-        .prepare(`DELETE FROM ${tableName} WHERE project_id = ? AND segment_id = ?`)
-        .run(input.projectId, input.segmentId);
-    }
-
-    insertedCount = insertOutlineVectorRecords([
-      {
-        projectId: input.projectId,
-        assetId: input.assetId,
-        segmentId: input.segmentId,
-        embeddingModel: input.embeddingModel,
-        startSeconds: input.startSeconds,
-        embedding: input.embedding,
-      },
-    ]);
-  });
-
-  return insertedCount;
-};
-
-export const replaceProjectOutlineVectorsForAsset = (input: {
-  projectId: string;
-  assetId: string;
-  embeddingModel: string;
-  segments: Array<{
-    segmentId: string;
-    startSeconds: number;
-    embedding: number[];
-  }>;
-}) => {
-  if (!isSqliteVecAvailable()) {
-    return 0;
-  }
-
-  let insertedCount = 0;
-
-  runInTransaction(() => {
-    const database = getDatabase();
-
-    for (const tableName of listOutlineVectorTableNames()) {
-      database
-        .prepare(
-          `DELETE FROM ${tableName} WHERE project_id = ? AND asset_id = ? AND embedding_model = ?`
-        )
-        .run(input.projectId, input.assetId, input.embeddingModel);
-    }
-
-    insertedCount = insertOutlineVectorRecords(
-      input.segments.map((segment) => ({
-        projectId: input.projectId,
-        assetId: input.assetId,
-        segmentId: segment.segmentId,
-        embeddingModel: input.embeddingModel,
-        startSeconds: segment.startSeconds,
-        embedding: segment.embedding,
-      }))
-    );
-  });
-
-  return insertedCount;
-};
-
-export const countProjectOutlineVectors = (projectId: string, embeddingModel: string) => {
-  if (!isSqliteVecAvailable()) {
-    return 0;
-  }
-
-  const database = getDatabase();
-
-  return listOutlineVectorTableNames().reduce((total, tableName) => {
-    const row = database
-      .prepare(
-        `SELECT COUNT(*) AS count FROM ${tableName} WHERE project_id = ? AND embedding_model = ?`
-      )
-      .get(projectId, embeddingModel) as { count: number };
-
-    return total + row.count;
-  }, 0);
-};
 
 const getMediaTypeFromMime = (mimeType: string, filename: string): "video" | "image" => {
   if (mimeType.startsWith("image/")) {
@@ -1080,9 +787,29 @@ export const getSettings = (): PersistedAppSettings => {
       stored.get("ffmpegExecutablePath") ?? SETTINGS_DEFAULTS.ffmpegExecutablePath,
     ffprobeExecutablePath:
       stored.get("ffprobeExecutablePath") ?? SETTINGS_DEFAULTS.ffprobeExecutablePath,
-    aiApiBaseUrl: stored.get("aiApiBaseUrl") ?? SETTINGS_DEFAULTS.aiApiBaseUrl,
-    aiApiKey: stored.get("aiApiKey") ?? SETTINGS_DEFAULTS.aiApiKey,
-    aiModelName: stored.get("aiModelName") ?? SETTINGS_DEFAULTS.aiModelName,
+    aiTextProvider:
+      (stored.get("aiTextProvider") as PersistedAppSettings["aiTextProvider"]) ??
+      SETTINGS_DEFAULTS.aiTextProvider,
+    openaiApiBaseUrl:
+      stored.get("openaiApiBaseUrl") ??
+      stored.get("aiApiBaseUrl") ??
+      SETTINGS_DEFAULTS.openaiApiBaseUrl,
+    openaiApiKey:
+      stored.get("openaiApiKey") ??
+      stored.get("aiApiKey") ??
+      SETTINGS_DEFAULTS.openaiApiKey,
+    grok2apiBaseUrl:
+      stored.get("grok2apiBaseUrl") ?? SETTINGS_DEFAULTS.grok2apiBaseUrl,
+    grok2apiApiKey:
+      stored.get("grok2apiApiKey") ?? SETTINGS_DEFAULTS.grok2apiApiKey,
+    openaiTextModelName:
+      stored.get("openaiTextModelName") ??
+      stored.get("aiModelName") ??
+      SETTINGS_DEFAULTS.openaiTextModelName,
+    grok2apiTextModelName:
+      stored.get("grok2apiTextModelName") ??
+      stored.get("aiModelName") ??
+      SETTINGS_DEFAULTS.grok2apiTextModelName,
     aiVisionBaseUrl:
       stored.get("aiVisionBaseUrl") ?? SETTINGS_DEFAULTS.aiVisionBaseUrl,
     aiVisionApiKey:
@@ -1090,16 +817,13 @@ export const getSettings = (): PersistedAppSettings => {
     aiVisionModelName:
       stored.get("aiVisionModelName") ?? SETTINGS_DEFAULTS.aiVisionModelName,
     aiVisionFps: stored.get("aiVisionFps") ?? SETTINGS_DEFAULTS.aiVisionFps,
-    storySearchProvider:
+    storySearchProvider: normalizeProjectSearchProvider(
       (stored.get("storySearchProvider") as PersistedAppSettings["storySearchProvider"]) ??
-      SETTINGS_DEFAULTS.storySearchProvider,
-    aiEmbeddingModelName:
-      stored.get("aiEmbeddingModelName") ?? SETTINGS_DEFAULTS.aiEmbeddingModelName,
-    localEmbeddingModelDirectory:
-      stored.get("localEmbeddingModelDirectory") ??
-      SETTINGS_DEFAULTS.localEmbeddingModelDirectory,
-    localEmbeddingModelName:
-      stored.get("localEmbeddingModelName") ?? SETTINGS_DEFAULTS.localEmbeddingModelName,
+        SETTINGS_DEFAULTS.storySearchProvider
+    ),
+    aiSearchProvider:
+      (stored.get("aiSearchProvider") as PersistedAppSettings["aiSearchProvider"]) ??
+      SETTINGS_DEFAULTS.aiSearchProvider,
     aiSearchModelName:
       stored.get("aiSearchModelName") ?? SETTINGS_DEFAULTS.aiSearchModelName,
     localTtsModelName:
@@ -1119,17 +843,31 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     defaultManagedImport: String(settings.defaultManagedImport),
     ffmpegExecutablePath: settings.ffmpegExecutablePath,
     ffprobeExecutablePath: settings.ffprobeExecutablePath,
-    aiApiBaseUrl: settings.aiApiBaseUrl,
-    aiApiKey: settings.aiApiKey,
-    aiModelName: settings.aiModelName,
+    aiTextProvider: settings.aiTextProvider,
+    openaiApiBaseUrl: settings.openaiApiBaseUrl,
+    openaiApiKey: settings.openaiApiKey,
+    grok2apiBaseUrl: settings.grok2apiBaseUrl,
+    grok2apiApiKey: settings.grok2apiApiKey,
+    aiApiBaseUrl:
+      settings.aiTextProvider === "grok2api"
+        ? settings.grok2apiBaseUrl
+        : settings.openaiApiBaseUrl,
+    aiApiKey:
+      settings.aiTextProvider === "grok2api"
+        ? settings.grok2apiApiKey
+        : settings.openaiApiKey,
+    openaiTextModelName: settings.openaiTextModelName,
+    grok2apiTextModelName: settings.grok2apiTextModelName,
+    aiModelName:
+      settings.aiTextProvider === "grok2api"
+        ? settings.grok2apiTextModelName
+        : settings.openaiTextModelName,
     aiVisionBaseUrl: settings.aiVisionBaseUrl,
     aiVisionApiKey: settings.aiVisionApiKey,
     aiVisionModelName: settings.aiVisionModelName,
     aiVisionFps: settings.aiVisionFps,
     storySearchProvider: settings.storySearchProvider,
-    aiEmbeddingModelName: settings.aiEmbeddingModelName,
-    localEmbeddingModelDirectory: settings.localEmbeddingModelDirectory,
-    localEmbeddingModelName: settings.localEmbeddingModelName,
+    aiSearchProvider: settings.aiSearchProvider,
     aiSearchModelName: settings.aiSearchModelName,
     localTtsModelName: settings.localTtsModelName,
     autoGenerateProjectScriptTts: String(settings.autoGenerateProjectScriptTts),
@@ -1201,9 +939,6 @@ const listProjectRows = (): ProjectRow[] => {
         p.name,
         p.description,
         p.story_search_provider,
-        p.embedding_model_source,
-        p.embedding_model_id,
-        p.embedding_model_locked,
         p.cross_asset_switch_mode,
         p.auto_trim_intro_outro,
         p.intro_trim_seconds,
@@ -1237,9 +972,6 @@ const getProjectRowById = (id: string) => {
         p.name,
         p.description,
         p.story_search_provider,
-        p.embedding_model_source,
-        p.embedding_model_id,
-        p.embedding_model_locked,
         p.cross_asset_switch_mode,
         p.auto_trim_intro_outro,
         p.intro_trim_seconds,
@@ -1461,12 +1193,6 @@ const ensureDefaultProjectForExistingMaterials = () => {
     name: "默认项目",
     description: "由现有素材自动迁移生成。",
     storySearchProvider: getSettings().storySearchProvider,
-    embeddingModelSource:
-      getSettings().storySearchProvider === "local_embedding" ? "local" : "remote",
-    embeddingModelId:
-      getSettings().storySearchProvider === "local_embedding"
-        ? getSettings().localEmbeddingModelName
-        : getSettings().aiEmbeddingModelName,
   });
   const updatedProject = updateProject(project.id, {
     materialIds: materials.map((item) => item.id),
@@ -1777,7 +1503,7 @@ export const updateMaterial = (id: string, patch: MaterialPatchInput) => {
       id,
       OUTLINE_PROMPT_VERSION,
       OUTLINE_PARSER_VERSION,
-      getSettings().aiModelName,
+      resolveTextModelProviderConfig(getSettings()).model,
       storyOutline ? JSON.stringify(storyOutline) : null,
       outlineStatus,
       outlineError ?? null,
@@ -1795,15 +1521,7 @@ export const updateMaterial = (id: string, patch: MaterialPatchInput) => {
 
 export const replaceOutlineSegmentsForAsset = (
   assetId: string,
-  segments: Array<
-    Omit<StoryOutlineSearchSegment, "assetTitle"> & {
-      assetTitle: string;
-      embedding?: number[];
-      embeddingModel?: string | null;
-      embeddingStatus?: "idle" | "loading" | "success" | "error";
-      embeddingError?: string | null;
-    }
-  >
+  segments: Array<Omit<StoryOutlineSearchSegment, "assetTitle"> & { assetTitle: string }>
 ) => {
   const database = getDatabase();
   const now = toIsoNow();
@@ -1824,12 +1542,8 @@ export const replaceOutlineSegmentsForAsset = (
         end_seconds,
         timestamp_text,
         searchable_text,
-        embedding_json,
-        embedding_model,
-        embedding_status,
-        embedding_error,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (const segment of segments) {
@@ -1843,10 +1557,6 @@ export const replaceOutlineSegmentsForAsset = (
         segment.endSeconds,
         segment.timestamp,
         segment.searchableText,
-        segment.embedding ? JSON.stringify(segment.embedding) : null,
-        segment.embeddingModel ?? null,
-        segment.embeddingStatus ?? "idle",
-        segment.embeddingError ?? null,
         now
       );
     }
@@ -1857,13 +1567,7 @@ export const replaceOutlineSegmentsForAsset = (
 
 export const replaceOutlineSegmentForAsset = (
   assetId: string,
-  segment: Omit<StoryOutlineSearchSegment, "assetTitle"> & {
-    assetTitle: string;
-    embedding?: number[];
-    embeddingModel?: string | null;
-    embeddingStatus?: "idle" | "loading" | "success" | "error";
-    embeddingError?: string | null;
-  }
+  segment: Omit<StoryOutlineSearchSegment, "assetTitle"> & { assetTitle: string }
 ) => {
   const database = getDatabase();
   const now = toIsoNow();
@@ -1881,12 +1585,8 @@ export const replaceOutlineSegmentForAsset = (
           end_seconds,
           timestamp_text,
           searchable_text,
-          embedding_json,
-          embedding_model,
-          embedding_status,
-          embedding_error,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
           asset_id = excluded.asset_id,
           scene_id = excluded.scene_id,
@@ -1896,10 +1596,6 @@ export const replaceOutlineSegmentForAsset = (
           end_seconds = excluded.end_seconds,
           timestamp_text = excluded.timestamp_text,
           searchable_text = excluded.searchable_text,
-          embedding_json = excluded.embedding_json,
-          embedding_model = excluded.embedding_model,
-          embedding_status = excluded.embedding_status,
-          embedding_error = excluded.embedding_error,
           updated_at = excluded.updated_at
       `)
       .run(
@@ -1912,210 +1608,11 @@ export const replaceOutlineSegmentForAsset = (
         segment.endSeconds,
         segment.timestamp,
         segment.searchableText,
-        segment.embedding ? JSON.stringify(segment.embedding) : null,
-        segment.embeddingModel ?? null,
-        segment.embeddingStatus ?? "idle",
-        segment.embeddingError ?? null,
         now
       );
 
     database.prepare("UPDATE asset SET updated_at = ? WHERE id = ?").run(now, assetId);
   });
-};
-
-export const getOutlineVectorSearchSupport = () => getOutlineVectorSearchSupportInternal();
-
-export const removeOutlineVectorsForAsset = (assetId: string) => {
-  runInTransaction(() => {
-    deleteOutlineVectorRowsByColumn("asset_id", assetId);
-  });
-};
-
-export const syncOutlineVectorsForAsset = (assetId: string) => {
-  const support = getOutlineVectorSearchSupportInternal();
-
-  runInTransaction(() => {
-    deleteOutlineVectorRowsByColumn("asset_id", assetId);
-
-    if (!support.available) {
-      return;
-    }
-
-    const database = getDatabase();
-    const projectIds = listProjectIdsByAssetId(assetId);
-
-    if (projectIds.length === 0) {
-      return;
-    }
-
-    const rows = database
-      .prepare(`
-        SELECT
-          id,
-          asset_id,
-          start_seconds,
-          embedding_model,
-          embedding_json
-        FROM asset_outline_segment
-        WHERE asset_id = ?
-          AND embedding_status = 'success'
-          AND embedding_json IS NOT NULL
-        ORDER BY start_seconds ASC
-      `)
-      .all(assetId) as Array<{
-        id: string;
-        asset_id: string;
-        start_seconds: number;
-        embedding_model: string | null;
-        embedding_json: string | null;
-      }>;
-
-    const vectorRecords = rows.flatMap((row) => {
-      const embedding = parseEmbeddingJson(row.embedding_json);
-
-      if (!embedding || embedding.length === 0) {
-        return [];
-      }
-
-        return projectIds.map((projectId) => ({
-          projectId,
-          assetId: row.asset_id,
-          segmentId: row.id,
-          embeddingModel: row.embedding_model ?? "",
-          startSeconds: row.start_seconds,
-          embedding,
-        }));
-    });
-
-    insertOutlineVectorRecords(vectorRecords);
-  });
-
-  return support;
-};
-
-export const syncOutlineVectorsForProject = (projectId: string) => {
-  const support = getOutlineVectorSearchSupportInternal();
-
-  runInTransaction(() => {
-    deleteOutlineVectorRowsByColumn("project_id", projectId);
-
-    if (!support.available) {
-      return;
-    }
-
-    const database = getDatabase();
-    const rows = database
-      .prepare(`
-        SELECT
-          s.id,
-          s.asset_id,
-          s.start_seconds,
-          s.embedding_model,
-          s.embedding_json
-        FROM asset_outline_segment s
-        INNER JOIN project_asset pa ON pa.asset_id = s.asset_id
-        WHERE pa.project_id = ?
-          AND s.embedding_status = 'success'
-          AND s.embedding_json IS NOT NULL
-        ORDER BY s.start_seconds ASC
-      `)
-      .all(projectId) as Array<{
-        id: string;
-        asset_id: string;
-        start_seconds: number;
-        embedding_model: string | null;
-        embedding_json: string | null;
-      }>;
-
-    const vectorRecords = rows.flatMap((row) => {
-      const embedding = parseEmbeddingJson(row.embedding_json);
-
-      if (!embedding || embedding.length === 0) {
-        return [];
-      }
-
-        return [
-          {
-            projectId,
-            assetId: row.asset_id,
-            segmentId: row.id,
-            embeddingModel: row.embedding_model ?? "",
-            startSeconds: row.start_seconds,
-            embedding,
-          },
-        ];
-    });
-
-    insertOutlineVectorRecords(vectorRecords);
-  });
-
-  return support;
-};
-
-export const searchOutlineSegmentsByVector = (input: {
-  projectId: string;
-  embeddingModel: string;
-  queryEmbedding: number[];
-  limit: number;
-}): StoryOutlineSearchResult[] => {
-  const support = getOutlineVectorSearchSupportInternal();
-  if (!support.available || input.queryEmbedding.length === 0) {
-    return [];
-  }
-
-  const database = getDatabase();
-  const tableName = getOutlineVectorTableName(input.queryEmbedding.length);
-  const existingTables = new Set(listOutlineVectorTableNames());
-
-  if (!existingTables.has(tableName)) {
-    return [];
-  }
-
-  const rows = database
-    .prepare(`
-      WITH vector_matches AS (
-        SELECT
-          segment_id,
-          distance
-        FROM ${tableName}
-        WHERE embedding MATCH vec_f32(?)
-          AND k = ?
-          AND project_id = ?
-          AND embedding_model = ?
-      )
-      SELECT
-        s.id,
-        s.asset_id,
-        a.title AS asset_title,
-        s.scene_id,
-        s.scene_title,
-        s.scene_description,
-        s.start_seconds,
-        s.end_seconds,
-        s.timestamp_text,
-        s.searchable_text,
-        s.embedding_json,
-        vm.distance
-      FROM vector_matches vm
-      INNER JOIN asset_outline_segment s ON s.id = vm.segment_id
-      INNER JOIN asset a ON a.id = s.asset_id
-      ORDER BY vm.distance ASC, s.start_seconds ASC
-    `)
-    .all(
-      JSON.stringify(input.queryEmbedding),
-      Math.max(1, input.limit),
-      input.projectId,
-      input.embeddingModel
-    ) as Array<
-      OutlineSegmentRow & {
-        distance: number;
-      }
-    >;
-
-  return rows.map((row) => ({
-    ...mapRowToOutlineSegment(row),
-    score: Math.max(0, 1 - row.distance),
-  }));
 };
 
 export const listOutlineSegmentsByProjectId = (
@@ -2136,10 +1633,6 @@ export const listOutlineSegmentsByProjectId = (
         s.end_seconds,
         s.timestamp_text,
         s.searchable_text,
-        s.embedding_json,
-        s.embedding_model,
-        s.embedding_status,
-        s.embedding_error,
         s.updated_at
       FROM asset_outline_segment s
       INNER JOIN asset a ON a.id = s.asset_id
@@ -2278,8 +1771,6 @@ export const deleteMaterial = (id: string) => {
   const now = toIsoNow();
 
   runInTransaction(() => {
-    deleteOutlineVectorRowsByColumn("asset_id", id);
-
     database.prepare(`
       UPDATE project
       SET updated_at = ?
@@ -2340,11 +1831,7 @@ const replaceProjectMaterialIds = (projectId: string, materialIds: string[], now
 export const createProject = (input: ProjectCreateInput) => {
   const database = getDatabase();
   const normalizedName = input.name.trim();
-  const embeddingConfig = normalizeProjectEmbeddingConfig({
-    storySearchProvider: input.storySearchProvider,
-    embeddingModelSource: input.embeddingModelSource,
-    embeddingModelId: input.embeddingModelId,
-  });
+  const storySearchProvider = normalizeProjectSearchProvider(input.storySearchProvider);
 
   if (!normalizedName) {
     throw new Error("项目名称不能为空。");
@@ -2359,9 +1846,6 @@ export const createProject = (input: ProjectCreateInput) => {
       name,
       description,
       story_search_provider,
-      embedding_model_source,
-      embedding_model_id,
-      embedding_model_locked,
       cross_asset_switch_mode,
       auto_trim_intro_outro,
       intro_trim_seconds,
@@ -2374,14 +1858,12 @@ export const createProject = (input: ProjectCreateInput) => {
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, 0, 'frame_hold', 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+    VALUES (?, ?, ?, ?, 'frame_hold', 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
   `).run(
     projectId,
     normalizedName,
     input.description?.trim() || null,
-    embeddingConfig.storySearchProvider,
-    embeddingConfig.embeddingModelSource,
-    embeddingConfig.embeddingModelId,
+    storySearchProvider,
     now,
     now
   );
@@ -2412,16 +1894,8 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
     input.materialIds !== undefined ? input.materialIds : currentProject.materialIds;
   const nextStorySearchProvider =
     input.storySearchProvider !== undefined
-      ? input.storySearchProvider
+      ? normalizeProjectSearchProvider(input.storySearchProvider)
       : currentProject.storySearchProvider;
-  const nextEmbeddingModelSource =
-    input.embeddingModelSource !== undefined
-      ? input.embeddingModelSource
-      : currentProject.embeddingModelSource;
-  const nextEmbeddingModelId =
-    input.embeddingModelId !== undefined
-      ? input.embeddingModelId
-      : currentProject.embeddingModelId;
   const nextCrossAssetSwitchMode =
     input.crossAssetSwitchMode !== undefined
       ? input.crossAssetSwitchMode
@@ -2458,20 +1932,6 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
     throw new Error("项目名称不能为空。");
   }
 
-  const normalizedEmbeddingConfig = normalizeProjectEmbeddingConfig({
-    storySearchProvider: nextStorySearchProvider,
-    embeddingModelSource: nextEmbeddingModelSource,
-    embeddingModelId: nextEmbeddingModelId,
-  });
-  const embeddingConfigChanged =
-    normalizedEmbeddingConfig.storySearchProvider !== currentProject.storySearchProvider ||
-    normalizedEmbeddingConfig.embeddingModelSource !== currentProject.embeddingModelSource ||
-    normalizedEmbeddingConfig.embeddingModelId !== currentProject.embeddingModelId;
-
-  if (currentProject.embeddingModelLocked && embeddingConfigChanged) {
-    throw new Error("项目已经生成过向量索引，不能修改 Embedding 模型。请重建项目。");
-  }
-
   runInTransaction(() => {
     database
       .prepare(`
@@ -2480,8 +1940,6 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
           name = ?,
           description = ?,
           story_search_provider = ?,
-          embedding_model_source = ?,
-          embedding_model_id = ?,
           cross_asset_switch_mode = ?,
           auto_trim_intro_outro = ?,
           intro_trim_seconds = ?,
@@ -2497,9 +1955,7 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
       .run(
         nextName,
         nextDescription,
-        normalizedEmbeddingConfig.storySearchProvider,
-        normalizedEmbeddingConfig.embeddingModelSource,
-        normalizedEmbeddingConfig.embeddingModelId,
+        nextStorySearchProvider,
         nextCrossAssetSwitchMode,
         nextAutoTrimIntroOutro ? 1 : 0,
         nextIntroTrimSeconds,
@@ -2515,7 +1971,6 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
 
     if (input.materialIds !== undefined) {
       replaceProjectMaterialIds(id, nextMaterialIds, now);
-      deleteOutlineVectorRowsByColumn("project_id", id);
     }
   });
 
@@ -2989,7 +2444,6 @@ export const getProjectClipCompilationFileById = (
 
 export const deleteProject = (id: string) => {
   const database = getDatabase();
-  deleteOutlineVectorRowsByColumn("project_id", id);
   const result = database.prepare("DELETE FROM project WHERE id = ?").run(id);
 
   return result.changes > 0;

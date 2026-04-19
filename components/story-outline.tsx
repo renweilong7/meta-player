@@ -50,7 +50,7 @@ interface StoryOutlineProps {
   onMediaSelect?: (mediaId: string) => void;
   onSceneSelect: (id: string) => void;
   searchQuery?: string;
-  searchState?: "idle" | "loading" | "embedding" | "keyword" | "llm";
+  searchState?: "idle" | "loading" | "keyword" | "llm";
   searchResults?: StoryOutlineSearchResult[];
   searchDisplayItems?: StoryOutlineSearchDisplayItem[];
   currentSearchResultId?: string | null;
@@ -106,13 +106,11 @@ export function StoryOutline({
           },
         }));
   const searchStatusLabel =
-    searchState === "embedding"
-      ? "语义检索"
-      : searchState === "llm"
-        ? "大模型搜索"
-        : searchState === "loading"
-          ? "搜索中"
-          : "关键词检索";
+    searchState === "llm"
+      ? "大模型搜索"
+      : searchState === "loading"
+        ? "搜索中"
+        : "关键词检索";
 
   const handleToggleExpanded = (sceneId: string) => {
     setExpandedSceneId((current) => (current === sceneId ? null : sceneId));
@@ -228,9 +226,7 @@ export function StoryOutline({
             <div className="flex items-center gap-2">
               {typeof score === "number" ? (
                 <Badge variant="secondary" className="shrink-0">
-                  {searchState === "embedding" || searchState === "llm"
-                    ? score.toFixed(3)
-                    : score}
+                  {searchState === "llm" ? score.toFixed(3) : score}
                 </Badge>
               ) : null}
               <Button

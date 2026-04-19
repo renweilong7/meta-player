@@ -1,26 +1,24 @@
 import { OutlineExtractionStatus, StoryOutlineSceneRecord } from "@/lib/story-outline/types";
 
 export type StorySearchProvider =
-  | "remote_embedding"
-  | "local_embedding"
+  | "keyword"
   | "llm";
-
-export type ProjectEmbeddingModelSource = "remote" | "local";
 
 export type CrossAssetSwitchMode = "frame_hold" | "preload";
 
+export type TextAiProvider = "openai_compatible" | "grok2api";
+export type SearchAiProvider = "openai_compatible" | "grok2api";
+
 export type AiUsageProvider =
   | "openai_compatible"
+  | "grok2api"
   | "dashscope"
-  | "local_embedding"
   | "system_tts";
 
 export type AiUsageStatus = "success" | "error";
 
 export type AiUsageAction =
   | "story_outline_generation"
-  | "story_outline_embedding_index"
-  | "story_outline_embedding_search"
   | "story_outline_llm_search"
   | "scene_shot_analysis"
   | "project_script_tts";
@@ -74,35 +72,23 @@ export interface PersistedAppSettings {
   defaultManagedImport: boolean;
   ffmpegExecutablePath: string;
   ffprobeExecutablePath: string;
-  aiApiBaseUrl: string;
-  aiApiKey: string;
-  aiModelName: string;
+  aiTextProvider: TextAiProvider;
+  openaiApiBaseUrl: string;
+  openaiApiKey: string;
+  grok2apiBaseUrl: string;
+  grok2apiApiKey: string;
+  openaiTextModelName: string;
+  grok2apiTextModelName: string;
   aiVisionBaseUrl: string;
   aiVisionApiKey: string;
   aiVisionModelName: string;
   aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
-  aiEmbeddingModelName: string;
-  localEmbeddingModelDirectory: string;
-  localEmbeddingModelName: string;
+  aiSearchProvider: SearchAiProvider;
   aiSearchModelName: string;
   localTtsModelName: string;
   autoGenerateProjectScriptTts: boolean;
   crossAssetSwitchMode: CrossAssetSwitchMode;
-}
-
-export interface OutlineVectorSearchSupport {
-  available: boolean;
-  mode: "sqlite_vec" | "keyword_fallback";
-  reason: "sqlite_vec_unavailable" | null;
-}
-
-export interface LocalEmbeddingModelOption {
-  id: string;
-  name: string;
-  directoryName: string;
-  absolutePath: string;
-  source: "bundled" | "custom";
 }
 
 /**
@@ -198,9 +184,6 @@ export interface PersistedProject {
   description?: string;
   materialIds: string[];
   storySearchProvider: StorySearchProvider;
-  embeddingModelSource: ProjectEmbeddingModelSource;
-  embeddingModelId: string;
-  embeddingModelLocked: boolean;
   crossAssetSwitchMode?: CrossAssetSwitchMode;
   autoTrimIntroOutro?: boolean;
   introTrimSeconds?: number;
@@ -254,16 +237,12 @@ export interface ProjectCreateInput {
   name: string;
   description?: string;
   storySearchProvider: StorySearchProvider;
-  embeddingModelSource: ProjectEmbeddingModelSource;
-  embeddingModelId: string;
 }
 
 export interface ProjectUpdateInput {
   name?: string;
   description?: string;
   storySearchProvider?: StorySearchProvider;
-  embeddingModelSource?: ProjectEmbeddingModelSource;
-  embeddingModelId?: string;
   materialIds?: string[];
   crossAssetSwitchMode?: CrossAssetSwitchMode;
   autoTrimIntroOutro?: boolean;

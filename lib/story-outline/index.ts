@@ -5,24 +5,14 @@ import {
   PersistedProject,
 } from "@/lib/persistence/types";
 import {
-  countProjectOutlineVectors,
   getMaterialById,
   getProjectById,
-  lockProjectEmbeddingConfig,
   listMaterialsByProjectId,
   listProjectIdsByAssetId,
   listOutlineSegmentsByProjectId,
   replaceOutlineSegmentForAsset,
   replaceOutlineSegmentsForAsset,
-  replaceProjectOutlineVectorsForSegment,
-  replaceProjectOutlineVectorsForAsset,
-  searchOutlineSegmentsByVector,
 } from "@/lib/persistence/repository";
-import { generateEmbeddings } from "@/lib/story-outline/embedding";
-import {
-  generateLocalEmbeddings,
-  resolveLocalEmbeddingModel,
-} from "@/lib/story-outline/local-embedding";
 import { canUseLlmStorySearch, rankStorySegmentsWithLlm } from "@/lib/story-outline/llm-search";
 import {
   buildStoryOutlineSearchSegments,
@@ -38,27 +28,6 @@ const createKeywordFallback = (
   mode: "keyword" as const,
   results: searchStoryOutlineSegments(segments, query, limit),
 });
-
-const hasRemoteEmbeddingConfig = (settings: PersistedAppSettings) =>
-  Boolean(
-    settings.aiApiBaseUrl.trim() &&
-      settings.aiApiKey.trim()
-  );
-
-const canUseLocalEmbeddingModel = (
-  settings: PersistedAppSettings,
-  modelId: string
-) => {
-  try {
-    resolveLocalEmbeddingModel({
-      localEmbeddingModelDirectory: settings.localEmbeddingModelDirectory,
-      localEmbeddingModelName: modelId,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const buildSegmentsForMaterial = (material: PersistedMaterial) =>
   buildStoryOutlineSearchSegments([
@@ -76,35 +45,9 @@ const buildSegmentForMaterialScene = (
 ) =>
   buildSegmentsForMaterial(material).find((segment) => segment.sceneId === sceneId) ?? null;
 
-const buildProjectScopedSettings = (
-  settings: PersistedAppSettings,
-  project: PersistedProject
-) => ({
-  ...settings,
-  storySearchProvider: project.storySearchProvider,
-  aiEmbeddingModelName:
-    project.embeddingModelSource === "remote"
-      ? project.embeddingModelId
-      : settings.aiEmbeddingModelName,
-  localEmbeddingModelName:
-    project.embeddingModelSource === "local"
-      ? project.embeddingModelId
-      : settings.localEmbeddingModelName,
-});
-
 const ensureOutlineSegmentsForMaterial = (material: PersistedMaterial) => {
   const baseSegments = buildSegmentsForMaterial(material);
-
-  replaceOutlineSegmentsForAsset(
-    material.id,
-    baseSegments.map((segment) => ({
-      ...segment,
-      embeddingStatus: "idle" as const,
-      embeddingModel: null,
-      embeddingError: null,
-    }))
-  );
-
+  replaceOutlineSegmentsForAsset(material.id, baseSegments);
   return baseSegments;
 };
 
@@ -118,164 +61,35 @@ const ensureOutlineSegmentForMaterialScene = (
     return null;
   }
 
-  replaceOutlineSegmentForAsset(material.id, {
-    ...segment,
-    embeddingStatus: "idle" as const,
-    embeddingModel: null,
-    embeddingError: null,
-  });
-
+  replaceOutlineSegmentForAsset(material.id, segment);
   return segment;
 };
 
 const indexProjectMaterialOutline = async (
   material: PersistedMaterial,
-  project: PersistedProject,
-  settings: PersistedAppSettings
+  _project: PersistedProject,
+  _settings: PersistedAppSettings
 ) => {
   const baseSegments = ensureOutlineSegmentsForMaterial(material);
 
-  if (baseSegments.length === 0) {
-    return { indexedCount: 0, mode: "empty" as const };
-  }
-
-  if (project.storySearchProvider === "llm") {
-    return { indexedCount: baseSegments.length, mode: "keyword_only" as const };
-  }
-
-  if (project.storySearchProvider === "local_embedding") {
-    if (!canUseLocalEmbeddingModel(settings, project.embeddingModelId)) {
-      throw new Error("当前项目选择的本地 Embedding 模型不可用，请检查模型目录是否包含权重文件。");
-    }
-
-    const scopedSettings = buildProjectScopedSettings(settings, project);
-    const localModel = resolveLocalEmbeddingModel(scopedSettings);
-    const embeddings = await generateLocalEmbeddings(
-      baseSegments.map((segment) => segment.searchableText),
-      scopedSettings,
-      {
-        action: "story_outline_embedding_index",
-        projectId: project.id,
-        materialId: material.id,
-      }
-    );
-
-    replaceProjectOutlineVectorsForAsset({
-      projectId: project.id,
-      assetId: material.id,
-      embeddingModel: localModel.id,
-      segments: baseSegments.map((segment, index) => ({
-        segmentId: segment.id,
-        startSeconds: segment.startSeconds,
-        embedding: embeddings[index],
-      })),
-    });
-    lockProjectEmbeddingConfig(project.id);
-
-    return { indexedCount: baseSegments.length, mode: "embedding" as const };
-  }
-
-  if (!hasRemoteEmbeddingConfig(settings)) {
-    return { indexedCount: baseSegments.length, mode: "keyword_only" as const };
-  }
-
-  const embeddings = await generateEmbeddings(
-    baseSegments.map((segment) => segment.searchableText),
-    {
-      baseUrl: settings.aiApiBaseUrl,
-      apiKey: settings.aiApiKey,
-      model: project.embeddingModelId,
-      action: "story_outline_embedding_index",
-      projectId: project.id,
-      materialId: material.id,
-    }
-  );
-
-  replaceProjectOutlineVectorsForAsset({
-    projectId: project.id,
-    assetId: material.id,
-    embeddingModel: project.embeddingModelId,
-    segments: baseSegments.map((segment, index) => ({
-      segmentId: segment.id,
-      startSeconds: segment.startSeconds,
-      embedding: embeddings[index],
-    })),
-  });
-  lockProjectEmbeddingConfig(project.id);
-
-  return { indexedCount: baseSegments.length, mode: "embedding" as const };
+  return {
+    indexedCount: baseSegments.length,
+    mode: baseSegments.length > 0 ? ("keyword_only" as const) : ("empty" as const),
+  };
 };
 
 const indexProjectMaterialOutlineScene = async (
   material: PersistedMaterial,
   sceneId: string,
-  project: PersistedProject,
-  settings: PersistedAppSettings
+  _project: PersistedProject,
+  _settings: PersistedAppSettings
 ) => {
   const baseSegment = ensureOutlineSegmentForMaterialScene(material, sceneId);
 
-  if (!baseSegment) {
-    return { indexedCount: 0, mode: "empty" as const };
-  }
-
-  if (project.storySearchProvider === "llm") {
-    return { indexedCount: 1, mode: "keyword_only" as const };
-  }
-
-  if (project.storySearchProvider === "local_embedding") {
-    if (!canUseLocalEmbeddingModel(settings, project.embeddingModelId)) {
-      throw new Error("当前项目选择的本地 Embedding 模型不可用，请检查模型目录是否包含权重文件。");
-    }
-
-    const scopedSettings = buildProjectScopedSettings(settings, project);
-    const localModel = resolveLocalEmbeddingModel(scopedSettings);
-    const [embedding] = await generateLocalEmbeddings(
-      [baseSegment.searchableText],
-      scopedSettings,
-      {
-        action: "story_outline_embedding_index",
-        projectId: project.id,
-        materialId: material.id,
-      }
-    );
-
-    replaceProjectOutlineVectorsForSegment({
-      projectId: project.id,
-      assetId: material.id,
-      segmentId: baseSegment.id,
-      embeddingModel: localModel.id,
-      startSeconds: baseSegment.startSeconds,
-      embedding,
-    });
-    lockProjectEmbeddingConfig(project.id);
-
-    return { indexedCount: 1, mode: "embedding" as const };
-  }
-
-  if (!hasRemoteEmbeddingConfig(settings)) {
-    return { indexedCount: 1, mode: "keyword_only" as const };
-  }
-
-  const [embedding] = await generateEmbeddings([baseSegment.searchableText], {
-    baseUrl: settings.aiApiBaseUrl,
-    apiKey: settings.aiApiKey,
-    model: project.embeddingModelId,
-    action: "story_outline_embedding_index",
-    projectId: project.id,
-    materialId: material.id,
-  });
-
-  replaceProjectOutlineVectorsForSegment({
-    projectId: project.id,
-    assetId: material.id,
-    segmentId: baseSegment.id,
-    embeddingModel: project.embeddingModelId,
-    startSeconds: baseSegment.startSeconds,
-    embedding,
-  });
-  lockProjectEmbeddingConfig(project.id);
-
-  return { indexedCount: 1, mode: "embedding" as const };
+  return {
+    indexedCount: baseSegment ? 1 : 0,
+    mode: baseSegment ? ("keyword_only" as const) : ("empty" as const),
+  };
 };
 
 export const indexMaterialOutline = async (
@@ -382,26 +196,22 @@ export const searchProjectOutline = async (input: {
   settings: PersistedAppSettings;
   limit?: number;
 }): Promise<{
-  mode: "embedding" | "keyword" | "llm";
+  mode: "keyword" | "llm";
   results: StoryOutlineSearchResult[];
 }> => {
   const project = getProjectById(input.projectId);
   if (!project) {
     throw new Error("项目不存在。");
   }
+
   const effectiveProject: PersistedProject = {
     ...project,
     storySearchProvider: resolveSearchProviderByLicense(project.storySearchProvider),
   };
-
-  const effectiveSettings: PersistedAppSettings = buildProjectScopedSettings(
-    input.settings,
-    effectiveProject
-  );
   const limit = input.limit ?? 20;
-  const advancedSearchEnabled =
-    resolveSearchProviderByLicense("llm") === "llm";
+  const advancedSearchEnabled = resolveSearchProviderByLicense("llm") === "llm";
   let segments = listOutlineSegmentsByProjectId(input.projectId);
+
   if (segments.length === 0) {
     const materials = listMaterialsByProjectId(input.projectId).filter(
       (material) => (material.storyOutline ?? []).length > 0
@@ -409,7 +219,7 @@ export const searchProjectOutline = async (input: {
 
     if (materials.length > 0) {
       await Promise.allSettled(
-        materials.map((material) => indexMaterialOutline(material, effectiveSettings))
+        materials.map((material) => indexMaterialOutline(material, input.settings))
       );
       segments = listOutlineSegmentsByProjectId(input.projectId);
     }
@@ -419,117 +229,25 @@ export const searchProjectOutline = async (input: {
     return { mode: "keyword", results: [] };
   }
 
-  if (!advancedSearchEnabled) {
+  if (!advancedSearchEnabled || effectiveProject.storySearchProvider !== "llm") {
     return createKeywordFallback(segments, input.query, limit);
   }
 
-  if (effectiveSettings.storySearchProvider !== "llm") {
-    const vectorCount = countProjectOutlineVectors(
-      input.projectId,
-      effectiveProject.embeddingModelId
-    );
-    const materials = listMaterialsByProjectId(input.projectId).filter(
-      (material) => (material.storyOutline ?? []).length > 0
-    );
-
-    if (vectorCount < segments.length && materials.length > 0) {
-      const indexingResults = await Promise.allSettled(
-        materials.map((material) =>
-          indexProjectMaterialOutline(material, effectiveProject, input.settings)
-        )
-      );
-      const firstRejected = indexingResults.find(
-        (result): result is PromiseRejectedResult => result.status === "rejected"
-      );
-      if (firstRejected) {
-        throw firstRejected.reason;
-      }
-      segments = listOutlineSegmentsByProjectId(input.projectId);
-    }
-  }
-
-  if (effectiveSettings.storySearchProvider === "llm") {
-    if (!canUseLlmStorySearch(effectiveSettings)) {
-      return createKeywordFallback(segments, input.query, limit);
-    }
-
-    if (segments.length === 0) {
-      return { mode: "llm", results: [] };
-    }
-
-    try {
-      const results = await rankStorySegmentsWithLlm({
-        query: input.query,
-        candidates: segments,
-        settings: effectiveSettings,
-        limit,
-        projectId: input.projectId,
-      });
-
-      return { mode: "llm", results };
-    } catch {
-      // 大模型搜索失败时退回关键词检索，避免中断搜索能力。
-    }
-
+  if (!canUseLlmStorySearch(input.settings)) {
     return createKeywordFallback(segments, input.query, limit);
   }
 
-  if (effectiveSettings.storySearchProvider === "local_embedding") {
-    if (!canUseLocalEmbeddingModel(input.settings, effectiveProject.embeddingModelId)) {
-      throw new Error("当前项目选择的本地 Embedding 模型不可用，请检查模型目录是否包含权重文件。");
-    }
+  try {
+    const results = await rankStorySegmentsWithLlm({
+      query: input.query,
+      candidates: segments,
+      settings: input.settings,
+      limit,
+      projectId: input.projectId,
+    });
 
-    try {
-      const localModel = resolveLocalEmbeddingModel(effectiveSettings);
-      const [queryEmbedding] = await generateLocalEmbeddings(
-        [input.query],
-        effectiveSettings,
-        {
-          action: "story_outline_embedding_search",
-          projectId: input.projectId,
-        }
-      );
-      const vectorMatches = searchOutlineSegmentsByVector({
-        projectId: input.projectId,
-        embeddingModel: localModel.id,
-        queryEmbedding,
-        limit,
-      });
-
-      if (vectorMatches.length > 0) {
-        return { mode: "embedding", results: vectorMatches };
-      }
-    } catch (error) {
-      throw error;
-    }
-
+    return { mode: "llm", results };
+  } catch {
     return createKeywordFallback(segments, input.query, limit);
   }
-
-  if (hasRemoteEmbeddingConfig(input.settings)) {
-    try {
-      const [queryEmbedding] = await generateEmbeddings([input.query], {
-        baseUrl: input.settings.aiApiBaseUrl,
-        apiKey: input.settings.aiApiKey,
-        model: effectiveProject.embeddingModelId,
-        action: "story_outline_embedding_search",
-        projectId: input.projectId,
-      });
-
-      const vectorMatches = searchOutlineSegmentsByVector({
-        projectId: input.projectId,
-        embeddingModel: effectiveProject.embeddingModelId,
-        queryEmbedding,
-        limit,
-      });
-
-      if (vectorMatches.length > 0) {
-        return { mode: "embedding", results: vectorMatches };
-      }
-    } catch {
-      // Embedding 查询失败时退回关键词检索，避免中断搜索能力。
-    }
-  }
-
-  return createKeywordFallback(segments, input.query, limit);
 };

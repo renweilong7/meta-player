@@ -21,7 +21,7 @@ const postHandler = async (
     }
 
     const message =
-      error instanceof Error ? error.message : "剧情向量索引生成失败。";
+      error instanceof Error ? error.message : "剧情搜索索引生成失败。";
 
     return NextResponse.json({ message }, { status: 500 });
   }
