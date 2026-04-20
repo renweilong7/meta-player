@@ -71,7 +71,8 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   aiVisionFps: "2",
   storySearchProvider: "keyword",
   aiSearchProvider: "openai_compatible",
-  aiSearchModelName: "gpt-4o-mini",
+  openaiSearchModelName: "gpt-4o-mini",
+  grok2apiSearchModelName: "grok-2-latest",
   localTtsModelName: "Tingting",
   autoGenerateProjectScriptTts: true,
   crossAssetSwitchMode: "frame_hold",
@@ -824,8 +825,14 @@ export const getSettings = (): PersistedAppSettings => {
     aiSearchProvider:
       (stored.get("aiSearchProvider") as PersistedAppSettings["aiSearchProvider"]) ??
       SETTINGS_DEFAULTS.aiSearchProvider,
-    aiSearchModelName:
-      stored.get("aiSearchModelName") ?? SETTINGS_DEFAULTS.aiSearchModelName,
+    openaiSearchModelName:
+      stored.get("openaiSearchModelName") ??
+      stored.get("aiSearchModelName") ??
+      SETTINGS_DEFAULTS.openaiSearchModelName,
+    grok2apiSearchModelName:
+      stored.get("grok2apiSearchModelName") ??
+      stored.get("aiSearchModelName") ??
+      SETTINGS_DEFAULTS.grok2apiSearchModelName,
     localTtsModelName:
       stored.get("localTtsModelName") ?? SETTINGS_DEFAULTS.localTtsModelName,
     autoGenerateProjectScriptTts:
@@ -868,7 +875,12 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     aiVisionFps: settings.aiVisionFps,
     storySearchProvider: settings.storySearchProvider,
     aiSearchProvider: settings.aiSearchProvider,
-    aiSearchModelName: settings.aiSearchModelName,
+    openaiSearchModelName: settings.openaiSearchModelName,
+    grok2apiSearchModelName: settings.grok2apiSearchModelName,
+    aiSearchModelName:
+      settings.aiSearchProvider === "grok2api"
+        ? settings.grok2apiSearchModelName
+        : settings.openaiSearchModelName,
     localTtsModelName: settings.localTtsModelName,
     autoGenerateProjectScriptTts: String(settings.autoGenerateProjectScriptTts),
     crossAssetSwitchMode: settings.crossAssetSwitchMode,

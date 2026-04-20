@@ -46,6 +46,17 @@ const getProviderTextModelNameFromSettings = (
     ? settings.grok2apiTextModelName
     : settings.openaiTextModelName;
 
+const getProviderSearchModelNameFromSettings = (
+  settings: Pick<
+    PersistedAppSettings,
+    "openaiSearchModelName" | "grok2apiSearchModelName"
+  >,
+  provider: TextAiProvider | SearchAiProvider
+) =>
+  provider === "grok2api"
+    ? settings.grok2apiSearchModelName
+    : settings.openaiSearchModelName;
+
 export const getProviderDisplayName = (
   provider: TextAiProvider | SearchAiProvider
 ) => (provider === "grok2api" ? "grok2api" : "OpenAI 兼容");
@@ -80,7 +91,8 @@ export const resolveSearchModelProviderConfig = (settings: Pick<
   | "openaiApiKey"
   | "grok2apiBaseUrl"
   | "grok2apiApiKey"
-  | "aiSearchModelName"
+  | "openaiSearchModelName"
+  | "grok2apiSearchModelName"
   | "openaiTextModelName"
   | "grok2apiTextModelName"
 >) => {
@@ -94,7 +106,7 @@ export const resolveSearchModelProviderConfig = (settings: Pick<
     baseUrl,
     apiKey: getProviderApiKeyFromSettings(settings, provider).trim(),
     model:
-      settings.aiSearchModelName.trim() ||
+      getProviderSearchModelNameFromSettings(settings, provider).trim() ||
       getProviderTextModelNameFromSettings(settings, provider).trim(),
   };
 };
@@ -126,3 +138,11 @@ export const getEditableProviderTextModelName = (
   >,
   provider: TextAiProvider | SearchAiProvider
 ) => getProviderTextModelNameFromSettings(settings, provider);
+
+export const getEditableProviderSearchModelName = (
+  settings: Pick<
+    PersistedAppSettings,
+    "openaiSearchModelName" | "grok2apiSearchModelName"
+  >,
+  provider: TextAiProvider | SearchAiProvider
+) => getProviderSearchModelNameFromSettings(settings, provider);

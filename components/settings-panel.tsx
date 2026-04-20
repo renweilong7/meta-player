@@ -40,6 +40,7 @@ import {
 import {
   getEditableProviderApiKey,
   getEditableProviderBaseUrl,
+  getEditableProviderSearchModelName,
   getEditableProviderTextModelName,
   getDefaultProviderBaseUrl,
   getProviderDisplayName,
@@ -63,7 +64,8 @@ export interface AppSettingsValues {
   aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
   aiSearchProvider: SearchAiProvider;
-  aiSearchModelName: string;
+  openaiSearchModelName: string;
+  grok2apiSearchModelName: string;
   localTtsModelName: string;
   autoGenerateProjectScriptTts: boolean;
   crossAssetSwitchMode: CrossAssetSwitchMode;
@@ -128,7 +130,8 @@ export function SettingsPanel({
     aiVisionFps: values.aiVisionFps ?? "2",
     storySearchProvider: values.storySearchProvider ?? "keyword",
     aiSearchProvider: values.aiSearchProvider ?? "openai_compatible",
-    aiSearchModelName: values.aiSearchModelName ?? "",
+    openaiSearchModelName: values.openaiSearchModelName ?? "",
+    grok2apiSearchModelName: values.grok2apiSearchModelName ?? "",
     localTtsModelName: values.localTtsModelName ?? "Tingting",
     autoGenerateProjectScriptTts: values.autoGenerateProjectScriptTts ?? true,
     crossAssetSwitchMode: values.crossAssetSwitchMode ?? "frame_hold",
@@ -149,6 +152,10 @@ export function SettingsPanel({
   const editableTextProviderModelName = getEditableProviderTextModelName(
     normalizedValues,
     normalizedValues.aiTextProvider
+  );
+  const editableSearchProviderModelName = getEditableProviderSearchModelName(
+    normalizedValues,
+    normalizedValues.aiSearchProvider
   );
 
   const handleCurrentProviderBaseUrlChange = (value: string) => {
@@ -174,6 +181,15 @@ export function SettingsPanel({
       normalizedValues.aiTextProvider === "grok2api"
         ? "grok2apiTextModelName"
         : "openaiTextModelName",
+      value
+    );
+  };
+
+  const handleCurrentSearchProviderModelNameChange = (value: string) => {
+    onChangeField(
+      normalizedValues.aiSearchProvider === "grok2api"
+        ? "grok2apiSearchModelName"
+        : "openaiSearchModelName",
       value
     );
   };
@@ -469,9 +485,9 @@ export function SettingsPanel({
                         <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                         <Input
                           id="ai-search-model-name"
-                          value={normalizedValues.aiSearchModelName}
+                          value={editableSearchProviderModelName}
                           onChange={(event) =>
-                            onChangeField("aiSearchModelName", event.target.value)
+                            handleCurrentSearchProviderModelNameChange(event.target.value)
                           }
                           placeholder="gpt-4o-mini"
                           className="h-10 pl-9"

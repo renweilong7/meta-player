@@ -85,7 +85,8 @@ export interface PersistedAppSettings {
   aiVisionFps: string;
   storySearchProvider: StorySearchProvider;
   aiSearchProvider: SearchAiProvider;
-  aiSearchModelName: string;
+  openaiSearchModelName: string;
+  grok2apiSearchModelName: string;
   localTtsModelName: string;
   autoGenerateProjectScriptTts: boolean;
   crossAssetSwitchMode: CrossAssetSwitchMode;

@@ -308,18 +308,24 @@ export const rankStorySegmentsWithLlm = async (input: {
   }
 
   const providerConfig = resolveSearchModelProviderConfig(input.settings);
+  const requestBody: Record<string, unknown> = {
+    model: providerConfig.model || DEFAULT_SEARCH_MODEL,
+    temperature: 0,
+    stream: false,
+    messages: buildMessages(input.query, candidates),
+  };
+
+  if (providerConfig.provider === "openai_compatible") {
+    requestBody.response_format = storySearchResponseFormat;
+  }
+
   const response = await fetch(`${providerConfig.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${providerConfig.apiKey}`,
     },
-    body: JSON.stringify({
-      model: providerConfig.model || DEFAULT_SEARCH_MODEL,
-      temperature: 0,
-      response_format: storySearchResponseFormat,
-      messages: buildMessages(input.query, candidates),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   const payload = (await response.json()) as OpenAiChatCompletionResponse;

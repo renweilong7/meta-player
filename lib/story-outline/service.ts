@@ -84,18 +84,24 @@ export const generateStoryOutline = async (
   const normalizedBaseUrl = config.baseUrl.replace(/\/+$/, "");
   const provider = config.provider ?? "openai_compatible";
   const model = config.model ?? DEFAULT_OUTLINE_MODEL;
+  const requestBody: Record<string, unknown> = {
+    model,
+    temperature: 0.2,
+    stream: false,
+    messages: buildMessages(input),
+  };
+
+  if (provider === "openai_compatible") {
+    requestBody.response_format = storyOutlineResponseFormat;
+  }
+
   const response = await fetch(`${normalizedBaseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${config.apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      temperature: 0.2,
-      response_format: storyOutlineResponseFormat,
-      messages: buildMessages(input),
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   const payload = (await response.json()) as OpenAiChatCompletionResponse;

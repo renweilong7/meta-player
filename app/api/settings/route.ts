@@ -10,6 +10,7 @@ type SettingsRequestBody = Partial<PersistedAppSettings> & {
   aiApiBaseUrl?: string;
   aiApiKey?: string;
   aiModelName?: string;
+  aiSearchModelName?: string;
 };
 
 const getHandler = async () => {
@@ -61,7 +62,16 @@ const putHandler = async (request: Request) => {
         aiVisionFps: body.aiVisionFps ?? current.aiVisionFps,
         storySearchProvider: body.storySearchProvider ?? current.storySearchProvider,
         aiSearchProvider: body.aiSearchProvider ?? current.aiSearchProvider,
-        aiSearchModelName: body.aiSearchModelName ?? current.aiSearchModelName,
+        openaiSearchModelName:
+          body.openaiSearchModelName ??
+          (body.aiSearchProvider === "openai_compatible"
+            ? body.aiSearchModelName
+            : undefined) ??
+          current.openaiSearchModelName,
+        grok2apiSearchModelName:
+          body.grok2apiSearchModelName ??
+          (body.aiSearchProvider === "grok2api" ? body.aiSearchModelName : undefined) ??
+          current.grok2apiSearchModelName,
         localTtsModelName: body.localTtsModelName ?? current.localTtsModelName,
         autoGenerateProjectScriptTts:
           body.autoGenerateProjectScriptTts ?? current.autoGenerateProjectScriptTts,
