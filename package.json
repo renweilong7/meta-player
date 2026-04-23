@@ -37,6 +37,24 @@
     ],
     "extraResources": [
       {
+        "from": "dist/app/server/node_modules",
+        "to": "server/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist/app/server/.next",
+        "to": "server/.next",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist/app/server/package.json",
+        "to": "server/package.json"
+      },
+      {
         "from": "dist/app/scripts",
         "to": "python-scripts",
         "filter": [
