@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
+import { rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
+const packagedAppRoot = join(projectRoot, "dist", "app");
 
 const buildEnvironment = {
   ...process.env,
@@ -60,5 +62,6 @@ const runNpmScriptOrThrow = (scriptName) => {
 
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "prepare-python-runtime.mjs")]);
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "generate-icons.mjs")]);
+rmSync(packagedAppRoot, { recursive: true, force: true });
 runNpmScriptOrThrow("build");
 runOrThrow(process.execPath, [join(projectRoot, "scripts", "package-app.mjs")]);

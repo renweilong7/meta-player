@@ -102,6 +102,26 @@ const removeDirectoryContents = (directoryPath) => {
   rmSync(directoryPath, { recursive: true, force: true });
 };
 
+const removeNestedDirectoriesByName = (rootPath, directoryName) => {
+  if (!existsSync(rootPath)) {
+    return;
+  }
+
+  readdirSync(rootPath, { withFileTypes: true }).forEach((entry) => {
+    if (!entry.isDirectory()) {
+      return;
+    }
+
+    const entryPath = join(rootPath, entry.name);
+    if (entry.name === directoryName) {
+      removeDirectoryContents(entryPath);
+      return;
+    }
+
+    removeNestedDirectoriesByName(entryPath, directoryName);
+  });
+};
+
 const shouldPruneDirectory = (entryName) =>
   [
     "__pycache__",
@@ -236,6 +256,7 @@ mkdirSync(distRoot, { recursive: true });
 const serverOutputRoot = join(distRoot, "server");
 cpSync(standaloneRoot, serverOutputRoot, { recursive: true });
 rmSync(join(serverOutputRoot, ".meta-player"), { recursive: true, force: true });
+removeNestedDirectoriesByName(serverOutputRoot, ".meta-player");
 patchStandaloneServerForAsar(join(serverOutputRoot, "server.js"));
 
 mkdirSync(join(serverOutputRoot, ".next"), { recursive: true });

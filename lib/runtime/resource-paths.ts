@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const getElectronResourcesPath = () =>
@@ -22,7 +23,20 @@ const isExistingPath = (candidate: string | null | undefined): candidate is stri
   typeof candidate === "string" && candidate.trim().length > 0 && existsSync(candidate);
 
 export const getAppDataDirectory = () =>
-  process.env.META_PLAYER_DATA_DIR?.trim() || join(process.cwd(), ".meta-player");
+  process.env.META_PLAYER_DATA_DIR?.trim() ||
+  (process.platform === "win32"
+    ? join(
+        process.env.LOCALAPPDATA?.trim() || process.env.APPDATA?.trim() || homedir(),
+        "Meta Player",
+        ".meta-player"
+      )
+    : process.platform === "darwin"
+      ? join(homedir(), "Library", "Application Support", "Meta Player", ".meta-player")
+      : join(
+          process.env.XDG_DATA_HOME?.trim() || join(homedir(), ".local", "share"),
+          "meta-player",
+          ".meta-player"
+        ));
 
 const getBundledAppRootCandidates = () => {
   const electronResourcesPath = getElectronResourcesPath();
