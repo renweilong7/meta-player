@@ -15,6 +15,7 @@ const PRODUCTION_PORT = process.env.PORT || "3232";
 const PRODUCTION_HOST = "127.0.0.1";
 
 let productionServerStartupPromise = null;
+let productionHttpServer = null;
 
 const getDefaultAppDataDirectory = () => path.join(process.cwd(), ".meta-player");
 
@@ -87,49 +88,24 @@ const reportStartupError = (title, error) => {
   );
 };
 
-const resolveProductionServerPath = () => {
+const resolveProductionAppRoot = () => {
   const appPath = app.getAppPath();
   const candidates = [
-    path.join(process.resourcesPath, "server", "server.js"),
-    path.join(process.resourcesPath, "app.asar.unpacked", "server", "server.js"),
-    path.join(appPath, "server", "server.js"),
-    path.join(appPath, "dist", "app", "server", "server.js"),
+    appPath,
+    path.join(process.resourcesPath, "app"),
   ];
 
   const resolved = candidates.find((candidate) => existsSync(candidate));
   if (!resolved) {
-    throw new Error(`Unable to locate production server bundle from ${appPath}`);
+    throw new Error(`Unable to locate packaged app root from ${appPath}`);
   }
 
-  writeStartupLog(`Resolved production server path: ${resolved}`);
-  writeMainLog("info", "server.path_resolved", {
+  writeStartupLog(`Resolved production app root: ${resolved}`);
+  writeMainLog("info", "server.app_root_resolved", {
     resolved,
   });
   return resolved;
 };
-
-const waitForServer = (url, timeoutMs = 20000) =>
-  new Promise((resolve, reject) => {
-    const startedAt = Date.now();
-
-    const attempt = () => {
-      const request = http.get(url, (response) => {
-        response.resume();
-        resolve();
-      });
-
-      request.on("error", () => {
-        if (Date.now() - startedAt > timeoutMs) {
-          reject(new Error(`Timed out waiting for ${url}`));
-          return;
-        }
-
-        setTimeout(attempt, 250);
-      });
-    };
-
-    attempt();
-  });
 
 const startProductionServer = async () => {
   if (productionServerStartupPromise) {
@@ -137,12 +113,13 @@ const startProductionServer = async () => {
   }
 
   productionServerStartupPromise = (async () => {
-    const serverPath = resolveProductionServerPath();
+    const appRoot = resolveProductionAppRoot();
     const url = `http://${PRODUCTION_HOST}:${PRODUCTION_PORT}`;
+    const next = require("next");
 
-    writeStartupLog(`Starting production server from ${serverPath}`);
+    writeStartupLog(`Starting production server from ${appRoot}`);
     writeMainLog("info", "server.starting", {
-      serverPath,
+      appRoot,
       host: PRODUCTION_HOST,
       port: PRODUCTION_PORT,
     });
@@ -150,18 +127,36 @@ const startProductionServer = async () => {
     process.env.NODE_ENV = "production";
     process.env.HOSTNAME = PRODUCTION_HOST;
     process.env.PORT = String(PRODUCTION_PORT);
-    process.env.META_PLAYER_DATA_DIR = path.join(app.getPath("userData"), ".meta-player");
+    process.chdir(appRoot);
 
-    try {
-      require(serverPath);
-    } catch (error) {
-      const resolvedServerPath = require.resolve(serverPath);
-      delete require.cache[resolvedServerPath];
-      throw error;
-    }
+    const nextApp = next({
+      dev: false,
+      dir: appRoot,
+      conf: {
+        distDir: ".next",
+      },
+    });
+    const requestHandler = nextApp.getRequestHandler();
 
-    writeStartupLog(`Waiting for production server at ${url}`);
-    await waitForServer(url);
+    await nextApp.prepare();
+
+    productionHttpServer = http.createServer((request, response) =>
+      requestHandler(request, response)
+    );
+
+    await new Promise((resolve, reject) => {
+      if (!productionHttpServer) {
+        reject(new Error("Production HTTP server was not initialized."));
+        return;
+      }
+
+      productionHttpServer.once("error", reject);
+      productionHttpServer.listen(Number(PRODUCTION_PORT), PRODUCTION_HOST, () => {
+        productionHttpServer?.removeListener("error", reject);
+        resolve();
+      });
+    });
+
     writeStartupLog(`Production server is ready at ${url}`);
     writeMainLog("info", "server.ready", { url });
     return url;
@@ -401,6 +396,11 @@ process.on("unhandledRejection", (reason) => {
 });
 
 app.on("window-all-closed", () => {
+  if (productionHttpServer) {
+    productionHttpServer.close();
+    productionHttpServer = null;
+  }
+
   if (process.platform !== "darwin") {
     app.quit();
   }

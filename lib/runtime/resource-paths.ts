@@ -33,10 +33,7 @@ const getBundledAppRootCandidates = () => {
     process.cwd(),
     join(process.cwd(), ".."),
     join(process.cwd(), "..", ".."),
-    join(process.cwd(), "dist", "app"),
-    join(process.cwd(), "..", "dist", "app"),
     electronResourcesPath ? join(electronResourcesPath, "app") : null,
-    electronResourcesPath ? join(electronResourcesPath, "app", "dist", "app") : null,
   ]);
 };
 

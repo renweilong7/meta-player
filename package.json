@@ -8,10 +8,10 @@
     "generate:icons": "node scripts/generate-icons.mjs",
     "prepare:python-runtime": "node scripts/prepare-python-runtime.mjs",
     "build": "next build --webpack",
-    "package:app": "node scripts/run-package-build.mjs",
-    "dist:dir": "npm run package:app && node scripts/run-electron-builder.mjs --dir",
-    "dist:mac": "npm run package:app && node scripts/run-electron-builder.mjs --mac dmg zip",
-    "dist:win": "npm run package:app && node scripts/run-electron-builder.mjs --win nsis portable",
+    "build:desktop": "npm run prepare:python-runtime && npm run generate:icons && npm run build",
+    "dist:dir": "npm run build:desktop && electron-builder --dir",
+    "dist:mac": "npm run build:desktop && electron-builder --mac dmg zip",
+    "dist:win": "npm run build:desktop && electron-builder --win nsis portable",
     "start": "next start",
     "lint": "eslint .",
     "electron:dev": "concurrently \"npm run dev\" \"wait-on http://127.0.0.1:3000 && electron .\""
@@ -19,54 +19,34 @@
   "build": {
     "appId": "com.renyi.meta-player",
     "productName": "Meta Player",
-    "asar": true,
-    "asarUnpack": [
-      "server/**/*"
-    ],
+    "asar": false,
     "compression": "maximum",
     "electronDist": "node_modules/electron/dist",
     "icon": "build/icons/icon.png",
     "directories": {
-      "app": "dist/app",
       "output": "release"
     },
     "files": [
       "electron/**/*",
-      "server/**/*",
-      "package.json"
+      ".next/**/*",
+      "public/**/*",
+      "package.json",
+      "!dist{,/**/*}",
+      "!release{,/**/*}",
+      "!win-unpacked{,/**/*}",
+      "!.meta-player{,/**/*}"
     ],
     "extraResources": [
       {
-        "from": "dist/app/server/server.js",
-        "to": "server/server.js"
-      },
-      {
-        "from": "dist/app/server/node_modules",
-        "to": "server/node_modules",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "dist/app/server/.next",
-        "to": "server/.next",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "dist/app/server/package.json",
-        "to": "server/package.json"
-      },
-      {
-        "from": "dist/app/scripts",
+        "from": "scripts",
         "to": "python-scripts",
         "filter": [
-          "**/*"
+          "*.py",
+          "*.pyc"
         ]
       },
       {
-        "from": "dist/app/python",
+        "from": ".python-runtime",
         "to": "python",
         "filter": [
           "**/*"

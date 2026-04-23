@@ -143,14 +143,14 @@ npm run electron:dev
 ### 构建应用
 
 ```bash
-npm run package:app
+npm run build:desktop
 ```
 
 ## 打包
 
 ### Windows
 
-当前 Windows 打包脚本已经做了跨平台收口。请先确保本机满足：
+当前 Windows 打包流程使用常规的 `next build + electron-builder`。请先确保本机满足：
 
 - 已安装 Node.js
 - 已安装 Python 3，且 `py -3` 可用
@@ -164,7 +164,7 @@ npm run dist:win
 
 说明：
 
-- `dist:win` 会自动准备 Python runtime、构建前端、整理产物并生成 Windows 安装包
+- `dist:win` 会自动准备 Python runtime、生成图标、构建前端并生成 Windows 安装包
 
 ### macOS
 
