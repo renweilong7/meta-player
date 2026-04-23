@@ -33,21 +33,21 @@
     ],
     "extraResources": [
       {
-        "from": "server",
+        "from": "dist/app/server",
         "to": "server",
         "filter": [
           "**/*"
         ]
       },
       {
-        "from": "scripts",
+        "from": "dist/app/scripts",
         "to": "python-scripts",
         "filter": [
           "**/*"
         ]
       },
       {
-        "from": "python",
+        "from": "dist/app/python",
         "to": "python",
         "filter": [
           "**/*"
