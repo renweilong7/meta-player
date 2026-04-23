@@ -29,10 +29,16 @@
     },
     "files": [
       "electron/**/*",
-      "server/**/*",
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "scripts",
         "to": "python-scripts",
