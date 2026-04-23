@@ -24,23 +24,24 @@
     "electronDist": "node_modules/electron/dist",
     "icon": "build/icons/icon.png",
     "directories": {
+      "app": "dist/app",
       "output": "release"
     },
     "files": [
       "electron/**/*",
-      "dist/app/server/**/*",
+      "server/**/*",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "dist/app/scripts",
+        "from": "scripts",
         "to": "python-scripts",
         "filter": [
           "**/*"
         ]
       },
       {
-        "from": "dist/app/python",
+        "from": "python",
         "to": "python",
         "filter": [
           "**/*"

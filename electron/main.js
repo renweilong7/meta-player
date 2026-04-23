@@ -8,7 +8,6 @@ const {
   writeFileSync,
 } = require("node:fs");
 const http = require("node:http");
-const { homedir } = require("node:os");
 const path = require("node:path");
 
 const isDev = !app.isPackaged;
@@ -17,23 +16,10 @@ const PRODUCTION_HOST = "127.0.0.1";
 
 let productionServerStartupPromise = null;
 
+const getDefaultAppDataDirectory = () => path.join(process.cwd(), ".meta-player");
+
 const getAppDataDirectory = () =>
-  (
-    process.env.META_PLAYER_DATA_DIR ||
-    (process.platform === "win32"
-      ? path.join(
-          process.env.LOCALAPPDATA || process.env.APPDATA || homedir(),
-          "Meta Player",
-          ".meta-player"
-        )
-      : process.platform === "darwin"
-        ? path.join(homedir(), "Library", "Application Support", "Meta Player", ".meta-player")
-        : path.join(
-            process.env.XDG_DATA_HOME || path.join(homedir(), ".local", "share"),
-            "meta-player",
-            ".meta-player"
-          ))
-  ).trim();
+  (process.env.META_PLAYER_DATA_DIR || getDefaultAppDataDirectory()).trim();
 
 const getStartupLogPath = () =>
   path.join(app.getPath("userData"), "startup.log");

@@ -20,6 +20,7 @@ const standaloneStaticRoot = join(standaloneRoot, ".next", "static");
 const buildStaticRoot = join(projectRoot, ".next", "static");
 const publicRoot = join(projectRoot, "public");
 const scriptsRoot = join(projectRoot, "scripts");
+const electronRoot = join(projectRoot, "electron");
 const pythonRuntimeRoot = resolve(
   process.env.META_PLAYER_PYTHON_RUNTIME_PATH?.trim() || join(projectRoot, ".python-runtime")
 );
@@ -252,6 +253,10 @@ if (!existsSync(standaloneRoot)) {
 
 rmSync(distRoot, { recursive: true, force: true });
 mkdirSync(distRoot, { recursive: true });
+
+if (existsSync(electronRoot)) {
+  cpSync(electronRoot, join(distRoot, "electron"), { recursive: true });
+}
 
 const serverOutputRoot = join(distRoot, "server");
 cpSync(standaloneRoot, serverOutputRoot, { recursive: true });
