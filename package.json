@@ -37,6 +37,10 @@
     ],
     "extraResources": [
       {
+        "from": "dist/app/server/server.js",
+        "to": "server/server.js"
+      },
+      {
         "from": "dist/app/server/node_modules",
         "to": "server/node_modules",
         "filter": [
