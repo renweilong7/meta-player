@@ -14,6 +14,7 @@ import {
   PersistedAppSettings,
   PersistedLibrarySnapshot,
   PersistedMaterial,
+  PersistedMaterialMarkerClip,
   PersistedProject,
   PersistedProjectClipCompilation,
   ProjectCreateInput,
@@ -277,6 +278,27 @@ export const removeMaterialMarker = async (
       method: "DELETE",
     })
   );
+};
+
+export const createMaterialMarkerClips = async (
+  materialId: string,
+  input: {
+    projectId: string;
+    markerId?: string;
+  }
+): Promise<PersistedMaterialMarkerClip[]> => {
+  const response = await assertOk(
+    await fetchWithDiagnostics(`/api/materials/${materialId}/marker-clips`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    })
+  );
+
+  const data = (await response.json()) as { clips: PersistedMaterialMarkerClip[] };
+  return data.clips;
 };
 
 export const removeMaterial = async (id: string) => {

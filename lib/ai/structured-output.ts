@@ -90,32 +90,53 @@ export const sceneShotAnalysisResponseFormat = buildJsonSchemaResponseFormat(
   {
     type: "object",
     additionalProperties: false,
-    required: [
-      "summary",
-      "action",
-      "expressionAndGaze",
-      "cinematography",
-      "atmosphere",
-      "commentaryHooks",
-    ],
+    required: ["segments"],
     properties: {
-      summary: {
-        type: "string",
-      },
-      action: {
-        type: "string",
-      },
-      expressionAndGaze: {
-        type: "string",
-      },
-      cinematography: {
-        type: "string",
-      },
-      atmosphere: {
-        type: "string",
-      },
-      commentaryHooks: {
-        type: "string",
+      segments: {
+        type: "array",
+        minItems: 1,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "startOffsetSeconds",
+            "endOffsetSeconds",
+            "summary",
+            "action",
+            "expressionAndGaze",
+            "cinematography",
+            "atmosphere",
+            "commentaryHooks",
+          ],
+          properties: {
+            startOffsetSeconds: {
+              type: "number",
+              minimum: 0,
+            },
+            endOffsetSeconds: {
+              type: "number",
+              minimum: 0,
+            },
+            summary: {
+              type: "string",
+            },
+            action: {
+              type: "string",
+            },
+            expressionAndGaze: {
+              type: "string",
+            },
+            cinematography: {
+              type: "string",
+            },
+            atmosphere: {
+              type: "string",
+            },
+            commentaryHooks: {
+              type: "string",
+            },
+          },
+        },
       },
     },
   }

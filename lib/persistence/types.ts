@@ -5,14 +5,18 @@ export type StorySearchProvider =
   | "llm";
 
 export type CrossAssetSwitchMode = "frame_hold" | "preload";
+export type MarkerClipMode = "fast" | "precise";
+export type MarkerDirectionMode = "start" | "end";
 
 export type TextAiProvider = "openai_compatible" | "grok2api";
 export type SearchAiProvider = "openai_compatible" | "grok2api";
+export type VisionAiProvider = "dashscope" | "gemini" | "grok2api";
 
 export type AiUsageProvider =
   | "openai_compatible"
   | "grok2api"
   | "dashscope"
+  | "gemini"
   | "system_tts";
 
 export type AiUsageStatus = "success" | "error";
@@ -79,10 +83,14 @@ export interface PersistedAppSettings {
   grok2apiApiKey: string;
   openaiTextModelName: string;
   grok2apiTextModelName: string;
+  aiVisionProvider: VisionAiProvider;
   aiVisionBaseUrl: string;
   aiVisionApiKey: string;
   aiVisionModelName: string;
   aiVisionFps: string;
+  geminiVisionBaseUrl: string;
+  geminiVisionApiKey: string;
+  geminiVisionModelName: string;
   storySearchProvider: StorySearchProvider;
   aiSearchProvider: SearchAiProvider;
   openaiSearchModelName: string;
@@ -127,6 +135,20 @@ export interface PersistedMaterialMarker {
   content: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PersistedMaterialMarkerClip {
+  id: string;
+  markerId: string;
+  label: string;
+  filename: string;
+  absolutePath: string;
+  fileSize: number;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  src: string;
+  createdAt: string;
 }
 
 export interface PersistedProjectScriptAudio {
@@ -186,6 +208,8 @@ export interface PersistedProject {
   materialIds: string[];
   storySearchProvider: StorySearchProvider;
   crossAssetSwitchMode?: CrossAssetSwitchMode;
+  markerClipMode?: MarkerClipMode;
+  markerDirectionMode?: MarkerDirectionMode;
   autoTrimIntroOutro?: boolean;
   introTrimSeconds?: number;
   outroTrimSeconds?: number;
@@ -246,6 +270,8 @@ export interface ProjectUpdateInput {
   storySearchProvider?: StorySearchProvider;
   materialIds?: string[];
   crossAssetSwitchMode?: CrossAssetSwitchMode;
+  markerClipMode?: MarkerClipMode;
+  markerDirectionMode?: MarkerDirectionMode;
   autoTrimIntroOutro?: boolean;
   introTrimSeconds?: number;
   outroTrimSeconds?: number;

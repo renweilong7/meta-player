@@ -28,14 +28,16 @@ export interface StoryOutlineSearchResult extends StoryOutlineSearchSegment {
 const normalizeSearchText = (value: string) => value.trim().toLowerCase();
 
 const buildShotAnalysisSearchText = (scene: StoryOutlineSceneRecord) =>
-  [
-    scene.shotAnalysis?.summary ?? "",
-    scene.shotAnalysis?.action ?? "",
-    scene.shotAnalysis?.expressionAndGaze ?? "",
-    scene.shotAnalysis?.cinematography ?? "",
-    scene.shotAnalysis?.atmosphere ?? "",
-    scene.shotAnalysis?.commentaryHooks ?? "",
-  ].join(" ");
+  (scene.shotAnalysis?.segments ?? [])
+    .flatMap((segment) => [
+      segment.summary,
+      segment.action,
+      segment.expressionAndGaze,
+      segment.cinematography,
+      segment.atmosphere,
+      segment.commentaryHooks,
+    ])
+    .join(" ");
 
 export const buildStoryOutlineSearchSegments = (
   materials: OutlineSearchMaterial[]

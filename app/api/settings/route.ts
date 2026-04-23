@@ -56,10 +56,17 @@ const putHandler = async (request: Request) => {
           body.grok2apiTextModelName ??
           (body.aiTextProvider === "grok2api" ? body.aiModelName : undefined) ??
           current.grok2apiTextModelName,
+        aiVisionProvider: body.aiVisionProvider ?? current.aiVisionProvider,
         aiVisionBaseUrl: body.aiVisionBaseUrl ?? current.aiVisionBaseUrl,
         aiVisionApiKey: body.aiVisionApiKey ?? current.aiVisionApiKey,
         aiVisionModelName: body.aiVisionModelName ?? current.aiVisionModelName,
         aiVisionFps: body.aiVisionFps ?? current.aiVisionFps,
+        geminiVisionBaseUrl:
+          body.geminiVisionBaseUrl ?? current.geminiVisionBaseUrl,
+        geminiVisionApiKey:
+          body.geminiVisionApiKey ?? current.geminiVisionApiKey,
+        geminiVisionModelName:
+          body.geminiVisionModelName ?? current.geminiVisionModelName,
         storySearchProvider: body.storySearchProvider ?? current.storySearchProvider,
         aiSearchProvider: body.aiSearchProvider ?? current.aiSearchProvider,
         openaiSearchModelName:

@@ -44,6 +44,7 @@ const providerLabels: Record<PersistedAiUsageRecord["provider"], string> = {
   openai_compatible: "OpenAI 兼容",
   grok2api: "grok2api",
   dashscope: "DashScope",
+  gemini: "Gemini",
   system_tts: "系统 TTS",
 };
 

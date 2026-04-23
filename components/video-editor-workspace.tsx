@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Clapperboard, Download, GripHorizontal, Pencil, Play, Rows3, Trash2 } from "lucide-react";
+import { Clapperboard, Download, GripHorizontal, Pencil, Play, Rows3, Scissors, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -33,6 +33,8 @@ interface VideoEditorWorkspaceProps {
   onCreateMarker?: (content: string) => Promise<void>;
   onUpdateMarker?: (markerId: string, content: string) => Promise<void>;
   onDeleteMarker?: (markerId: string) => Promise<void>;
+  onExportMarkerClip?: (markerId: string) => Promise<void>;
+  onExportAllMarkerClips?: () => Promise<void>;
   onMarkStart?: () => void;
   onMarkEditStart?: (time: number) => void;
   onAdjustMarkerTime?: (nextTime: number) => void;
@@ -46,6 +48,9 @@ interface VideoEditorWorkspaceProps {
   isExportingProjectClips?: boolean;
   lastExportedCompilationPath?: string | null;
   onOpenExportDirectory?: () => void;
+  isExportingMarkerClips?: boolean;
+  lastExportedMarkerClipPath?: string | null;
+  onOpenMarkerClipDirectory?: () => void;
 }
 
 const formatSeconds = (value: number) => {
@@ -71,6 +76,8 @@ export function VideoEditorWorkspace({
   onCreateMarker,
   onUpdateMarker,
   onDeleteMarker,
+  onExportMarkerClip,
+  onExportAllMarkerClips,
   onMarkStart,
   onMarkEditStart,
   onAdjustMarkerTime,
@@ -84,6 +91,9 @@ export function VideoEditorWorkspace({
   isExportingProjectClips = false,
   lastExportedCompilationPath = null,
   onOpenExportDirectory,
+  isExportingMarkerClips = false,
+  lastExportedMarkerClipPath = null,
+  onOpenMarkerClipDirectory,
 }: VideoEditorWorkspaceProps) {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [markerContent, setMarkerContent] = useState("");
@@ -238,10 +248,36 @@ export function VideoEditorWorkspace({
         <div className="grid h-full min-h-0 gap-4 lg:grid-cols-2">
           <div className="flex min-h-0 flex-col rounded-xl border border-border bg-background/70">
           <div className="border-b border-border px-4 py-3">
-            <p className="text-sm font-medium text-foreground">标记管理</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              点击列表项跳转到对应时间，编辑与删除都在这里完成。
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">标记管理</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  点击列表项跳转到对应时间，也可以把相邻标记之间的片段直接切出来。
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={disabled || markers.length === 0 || isExportingMarkerClips}
+                onClick={() => void onExportAllMarkerClips?.()}
+              >
+                <Scissors className="mr-1 h-3.5 w-3.5" />
+                {isExportingMarkerClips ? "切割中..." : "全部切割"}
+              </Button>
+            </div>
+            {lastExportedMarkerClipPath ? (
+              <div className="mt-3 rounded-lg border border-border bg-background/80 px-3 py-2">
+                <p className="text-[11px] text-muted-foreground">最近切割导出</p>
+                <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="min-w-0 flex-1 truncate text-xs text-foreground">
+                    {lastExportedMarkerClipPath}
+                  </p>
+                  <Button variant="ghost" size="sm" onClick={onOpenMarkerClipDirectory}>
+                    打开目录
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <div className="min-h-0 flex-1 overflow-auto p-3">
@@ -277,6 +313,15 @@ export function VideoEditorWorkspace({
                     </button>
 
                     <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={disabled || isExportingMarkerClips}
+                        onClick={() => void onExportMarkerClip?.(marker.id)}
+                      >
+                        <Scissors className="mr-1 h-3.5 w-3.5" />
+                        切出片段
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon"

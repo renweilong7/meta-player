@@ -31,8 +31,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   CrossAssetSwitchMode,
+  MarkerClipMode,
+  MarkerDirectionMode,
   StorySearchProvider,
 } from "@/lib/persistence/types";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface ProjectItem {
   id: string;
@@ -41,6 +44,8 @@ export interface ProjectItem {
   materialIds: string[];
   storySearchProvider: StorySearchProvider;
   crossAssetSwitchMode?: CrossAssetSwitchMode;
+  markerClipMode?: MarkerClipMode;
+  markerDirectionMode?: MarkerDirectionMode;
   autoTrimIntroOutro?: boolean;
   introTrimSeconds?: number;
   outroTrimSeconds?: number;
@@ -103,6 +108,8 @@ interface ProjectViewProps {
       description?: string;
       storySearchProvider?: StorySearchProvider;
       crossAssetSwitchMode?: CrossAssetSwitchMode;
+      markerClipMode?: MarkerClipMode;
+      markerDirectionMode?: MarkerDirectionMode;
       autoTrimIntroOutro?: boolean;
       introTrimSeconds?: number;
       outroTrimSeconds?: number;
@@ -131,6 +138,9 @@ export function ProjectView({
     useState<StorySearchProvider>(defaultStorySearchProvider);
   const [crossAssetSwitchMode, setCrossAssetSwitchMode] =
     useState<CrossAssetSwitchMode>("frame_hold");
+  const [markerClipMode, setMarkerClipMode] = useState<MarkerClipMode>("precise");
+  const [markerDirectionMode, setMarkerDirectionMode] =
+    useState<MarkerDirectionMode>("end");
   const [autoTrimIntroOutro, setAutoTrimIntroOutro] = useState(false);
   const [introTrimSeconds, setIntroTrimSeconds] = useState("0");
   const [outroTrimSeconds, setOutroTrimSeconds] = useState("0");
@@ -155,6 +165,8 @@ export function ProjectView({
     setProjectDescription("");
     setStorySearchProvider(defaultStorySearchProvider);
     setCrossAssetSwitchMode("frame_hold");
+    setMarkerClipMode("precise");
+    setMarkerDirectionMode("end");
     setAutoTrimIntroOutro(false);
     setIntroTrimSeconds("0");
     setOutroTrimSeconds("0");
@@ -165,6 +177,9 @@ export function ProjectView({
     setProjectName("");
     setProjectDescription("");
     setStorySearchProvider(defaultStorySearchProvider);
+    setCrossAssetSwitchMode("frame_hold");
+    setMarkerClipMode("precise");
+    setMarkerDirectionMode("end");
     setIsDialogOpen(true);
   };
 
@@ -174,6 +189,8 @@ export function ProjectView({
     setProjectDescription(project.description ?? "");
     setStorySearchProvider(project.storySearchProvider);
     setCrossAssetSwitchMode(project.crossAssetSwitchMode ?? "frame_hold");
+    setMarkerClipMode(project.markerClipMode ?? "precise");
+    setMarkerDirectionMode(project.markerDirectionMode ?? "end");
     setAutoTrimIntroOutro(project.autoTrimIntroOutro ?? false);
     setIntroTrimSeconds(String(project.introTrimSeconds ?? 0));
     setOutroTrimSeconds(String(project.outroTrimSeconds ?? 0));
@@ -196,6 +213,8 @@ export function ProjectView({
         description: normalizedDescription || undefined,
         storySearchProvider,
         crossAssetSwitchMode,
+        markerClipMode,
+        markerDirectionMode,
         autoTrimIntroOutro,
         introTrimSeconds: normalizedIntroTrimSeconds,
         outroTrimSeconds: normalizedOutroTrimSeconds,
@@ -411,6 +430,73 @@ export function ProjectView({
                       <SelectItem value="preload">预加载目标素材</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="rounded-xl border border-border p-4">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium text-foreground">
+                        标记设置
+                      </Label>
+                      <p className="text-sm text-muted-foreground">
+                        控制按标记切片时使用的切割方式，以及标记点代表片段的起点还是终点。
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium text-foreground">
+                        切割方式
+                      </Label>
+                      <Select
+                        value={markerClipMode}
+                        onValueChange={(value) => setMarkerClipMode(value as MarkerClipMode)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择切割方式" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fast">快速</SelectItem>
+                          <SelectItem value="precise">精确</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm font-medium text-foreground">
+                          标记指向
+                        </Label>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className="inline-flex h-5 w-5 items-center justify-center rounded-full border border-border text-xs text-muted-foreground transition-colors hover:bg-muted"
+                              aria-label="查看标记指向说明"
+                            >
+                              ?
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-72 leading-5">
+                            片段起点：当前标记切到下一个标记，没有下一个时切到视频结尾。片段终点：从上一个标记切到当前标记，没有上一个时从视频开头开始。
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                      <Select
+                        value={markerDirectionMode}
+                        onValueChange={(value) =>
+                          setMarkerDirectionMode(value as MarkerDirectionMode)
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择标记指向" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="start">片段起点</SelectItem>
+                          <SelectItem value="end">片段终点</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="rounded-xl border border-border p-4">

@@ -175,6 +175,8 @@ const initializeSchema = (database: DatabaseSync) => {
       description TEXT,
       story_search_provider TEXT NOT NULL DEFAULT 'keyword',
       cross_asset_switch_mode TEXT NOT NULL DEFAULT 'frame_hold',
+      marker_clip_mode TEXT NOT NULL DEFAULT 'precise',
+      marker_direction_mode TEXT NOT NULL DEFAULT 'end',
       auto_trim_intro_outro INTEGER NOT NULL DEFAULT 0,
       intro_trim_seconds REAL NOT NULL DEFAULT 0,
       outro_trim_seconds REAL NOT NULL DEFAULT 0,
@@ -282,6 +284,8 @@ const initializeSchema = (database: DatabaseSync) => {
 
   ensureProjectColumn("story_search_provider", "TEXT NOT NULL DEFAULT 'keyword'");
   ensureProjectColumn("cross_asset_switch_mode", "TEXT NOT NULL DEFAULT 'frame_hold'");
+  ensureProjectColumn("marker_clip_mode", "TEXT NOT NULL DEFAULT 'precise'");
+  ensureProjectColumn("marker_direction_mode", "TEXT NOT NULL DEFAULT 'end'");
   ensureProjectColumn("auto_trim_intro_outro", "INTEGER NOT NULL DEFAULT 0");
   ensureProjectColumn("intro_trim_seconds", "REAL NOT NULL DEFAULT 0");
   ensureProjectColumn("outro_trim_seconds", "REAL NOT NULL DEFAULT 0");

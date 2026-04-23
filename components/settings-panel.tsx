@@ -36,6 +36,7 @@ import {
   SearchAiProvider,
   StorySearchProvider,
   TextAiProvider,
+  VisionAiProvider,
 } from "@/lib/persistence/types";
 import {
   getEditableProviderApiKey,
@@ -58,10 +59,14 @@ export interface AppSettingsValues {
   grok2apiApiKey: string;
   openaiTextModelName: string;
   grok2apiTextModelName: string;
+  aiVisionProvider: VisionAiProvider;
   aiVisionBaseUrl: string;
   aiVisionApiKey: string;
   aiVisionModelName: string;
   aiVisionFps: string;
+  geminiVisionBaseUrl: string;
+  geminiVisionApiKey: string;
+  geminiVisionModelName: string;
   storySearchProvider: StorySearchProvider;
   aiSearchProvider: SearchAiProvider;
   openaiSearchModelName: string;
@@ -112,6 +117,7 @@ export function SettingsPanel({
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVisionApiKey, setShowVisionApiKey] = useState(false);
+  const [showGeminiVisionApiKey, setShowGeminiVisionApiKey] = useState(false);
   const normalizedValues: AppSettingsValues = {
     materialSavePath: values.materialSavePath ?? "",
     defaultManagedImport: values.defaultManagedImport ?? false,
@@ -124,10 +130,14 @@ export function SettingsPanel({
     grok2apiApiKey: values.grok2apiApiKey ?? "",
     openaiTextModelName: values.openaiTextModelName ?? "",
     grok2apiTextModelName: values.grok2apiTextModelName ?? "",
+    aiVisionProvider: values.aiVisionProvider ?? "dashscope",
     aiVisionBaseUrl: values.aiVisionBaseUrl ?? "",
     aiVisionApiKey: values.aiVisionApiKey ?? "",
     aiVisionModelName: values.aiVisionModelName ?? "",
     aiVisionFps: values.aiVisionFps ?? "2",
+    geminiVisionBaseUrl: values.geminiVisionBaseUrl ?? "",
+    geminiVisionApiKey: values.geminiVisionApiKey ?? "",
+    geminiVisionModelName: values.geminiVisionModelName ?? "",
     storySearchProvider: values.storySearchProvider ?? "keyword",
     aiSearchProvider: values.aiSearchProvider ?? "openai_compatible",
     openaiSearchModelName: values.openaiSearchModelName ?? "",
@@ -504,9 +514,34 @@ export function SettingsPanel({
                   <div className="mb-4">
                     <p className="text-sm font-medium text-foreground">视觉模型</p>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      用于镜头解读和视频理解任务，支持单独配置 API 地址、模型和 FPS。
+                      用于镜头解读和视频理解任务，支持 DashScope、Gemini 和 grok2api 三条链路。
                     </p>
                   </div>
+                  <Field>
+                    <FieldLabel htmlFor="ai-vision-provider">视觉模型 Provider</FieldLabel>
+                    <FieldContent>
+                      <Select
+                        value={normalizedValues.aiVisionProvider}
+                        onValueChange={(value) =>
+                          onChangeField("aiVisionProvider", value as VisionAiProvider)
+                        }
+                      >
+                        <SelectTrigger id="ai-vision-provider" className="h-10 w-full">
+                          <SelectValue placeholder="选择视觉模型 Provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dashscope">DashScope</SelectItem>
+                          <SelectItem value="gemini">Gemini</SelectItem>
+                          <SelectItem value="grok2api">grok2api</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>
+                        控制镜头解读与视频理解走哪条模型链路。
+                      </FieldDescription>
+                    </FieldContent>
+                  </Field>
+                  {normalizedValues.aiVisionProvider === "dashscope" ? (
+                    <>
                   <Field>
                     <FieldLabel htmlFor="ai-vision-base-url">
                       视觉模型 Base URL
@@ -615,6 +650,230 @@ export function SettingsPanel({
                       </FieldDescription>
                     </FieldContent>
                   </Field>
+                    </>
+                  ) : normalizedValues.aiVisionProvider === "gemini" ? (
+                    <>
+                      <Field>
+                        <FieldLabel htmlFor="gemini-vision-base-url">
+                          Gemini Base URL
+                        </FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="gemini-vision-base-url"
+                              value={normalizedValues.geminiVisionBaseUrl}
+                              onChange={(event) =>
+                                onChangeField("geminiVisionBaseUrl", event.target.value)
+                              }
+                              placeholder="https://generativelanguage.googleapis.com/v1beta"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            Gemini 视频理解默认使用 Google AI Studio 的 `v1beta` 接口根路径。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="gemini-vision-model-name">
+                          Gemini 模型名称
+                        </FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="gemini-vision-model-name"
+                              value={normalizedValues.geminiVisionModelName}
+                              onChange={(event) =>
+                                onChangeField("geminiVisionModelName", event.target.value)
+                              }
+                              placeholder="gemini-2.5-flash"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            用于视频理解与镜头解读的 Gemini 模型名称。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="gemini-vision-api-key">Gemini API Key</FieldLabel>
+                        <FieldContent>
+                          <div className="flex gap-3">
+                            <div className="relative flex-1">
+                              <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                              <Input
+                                id="gemini-vision-api-key"
+                                value={normalizedValues.geminiVisionApiKey}
+                                onChange={(event) =>
+                                  onChangeField("geminiVisionApiKey", event.target.value)
+                                }
+                                type={showGeminiVisionApiKey ? "text" : "password"}
+                                placeholder="AIza..."
+                                className="h-10 pl-9 pr-11"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="absolute right-1 top-1 h-8 w-8"
+                                onClick={() => setShowGeminiVisionApiKey((current) => !current)}
+                                aria-label={
+                                  showGeminiVisionApiKey
+                                    ? "隐藏 Gemini API Key"
+                                    : "显示 Gemini API Key"
+                                }
+                              >
+                                {showGeminiVisionApiKey ? (
+                                  <EyeOff className="h-4 w-4" />
+                                ) : (
+                                  <Eye className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <FieldDescription>
+                            Gemini 视频理解单独使用的 API Key。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="ai-vision-fps">镜头解读 FPS</FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="ai-vision-fps"
+                              value={normalizedValues.aiVisionFps}
+                              onChange={(event) =>
+                                onChangeField("aiVisionFps", event.target.value)
+                              }
+                              placeholder="2"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            用于本地裁片和上传控制，默认 2，建议范围 0.1 到 10。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+                    </>
+                  ) : (
+                    <>
+                      <Field>
+                        <FieldLabel htmlFor="ai-vision-base-url">
+                          grok2api Base URL
+                        </FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="ai-vision-base-url"
+                              value={normalizedValues.aiVisionBaseUrl}
+                              onChange={(event) =>
+                                onChangeField("aiVisionBaseUrl", event.target.value)
+                              }
+                              placeholder="http://127.0.0.1:8000/v1"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            grok2api 走 OpenAI 兼容 `/chat/completions`，镜头解读会先本地抽帧，再把多张图片作为输入发送。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="ai-vision-model-name">
+                          grok2api 模型名称
+                        </FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="ai-vision-model-name"
+                              value={normalizedValues.aiVisionModelName}
+                              onChange={(event) =>
+                                onChangeField("aiVisionModelName", event.target.value)
+                              }
+                              placeholder="grok-2-vision-latest"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            请填写支持图片输入的视觉模型名称，例如支持 `image_url` 内容块的 grok2api 模型。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="ai-vision-api-key">grok2api API Key</FieldLabel>
+                        <FieldContent>
+                          <div className="flex gap-3">
+                            <div className="relative flex-1">
+                              <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                              <Input
+                                id="ai-vision-api-key"
+                                value={normalizedValues.aiVisionApiKey}
+                                onChange={(event) =>
+                                  onChangeField("aiVisionApiKey", event.target.value)
+                                }
+                                type={showVisionApiKey ? "text" : "password"}
+                                placeholder="sk-..."
+                                className="h-10 pl-9 pr-11"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="absolute right-1 top-1 h-8 w-8"
+                                onClick={() => setShowVisionApiKey((current) => !current)}
+                                aria-label={
+                                  showVisionApiKey
+                                    ? "隐藏 grok2api API Key"
+                                    : "显示 grok2api API Key"
+                                }
+                              >
+                                {showVisionApiKey ? (
+                                  <EyeOff className="h-4 w-4" />
+                                ) : (
+                                  <Eye className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+                          <FieldDescription>
+                            镜头解读会使用这组 API Key 调用 grok2api 视觉接口。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+
+                      <Field>
+                        <FieldLabel htmlFor="ai-vision-fps">镜头解读 FPS</FieldLabel>
+                        <FieldContent>
+                          <div className="relative">
+                            <Bot className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              id="ai-vision-fps"
+                              value={normalizedValues.aiVisionFps}
+                              onChange={(event) =>
+                                onChangeField("aiVisionFps", event.target.value)
+                              }
+                              placeholder="2"
+                              className="h-10 pl-9"
+                            />
+                          </div>
+                          <FieldDescription>
+                            用于控制本地抽帧密度。值越高，发送到 grok2api 的图片越多，成本和延迟也会更高。
+                          </FieldDescription>
+                        </FieldContent>
+                      </Field>
+                    </>
+                  )}
                 </div>
               </FieldGroup>
             </CardContent>

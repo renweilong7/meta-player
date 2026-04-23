@@ -19,15 +19,24 @@ export interface StoryOutlineSceneRecord {
 
 export type SceneShotAnalysisStatus = "idle" | "loading" | "success" | "error";
 
+export interface SceneShotAnalysisSegment {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  startTimecode: string;
+  endTimecode: string;
+  summary: string;
+  action: string;
+  expressionAndGaze: string;
+  cinematography: string;
+  atmosphere: string;
+  commentaryHooks: string;
+}
+
 export interface SceneShotAnalysis {
   status: SceneShotAnalysisStatus;
   error?: string | null;
-  summary?: string;
-  action?: string;
-  expressionAndGaze?: string;
-  cinematography?: string;
-  atmosphere?: string;
-  commentaryHooks?: string;
+  segments?: SceneShotAnalysisSegment[];
   updatedAt?: string;
 }
 

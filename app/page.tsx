@@ -36,6 +36,7 @@ import {
   uploadProjectAudio,
   createProjectScriptClip,
   compileProjectClipSequence,
+  createMaterialMarkerClips,
   patchMaterial,
   generateMaterialSceneShotAnalysis,
   patchMaterialMarker,
@@ -55,7 +56,10 @@ import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
 import {
   MaterialImportInput,
   CrossAssetSwitchMode,
+  MarkerClipMode,
+  MarkerDirectionMode,
   PersistedAiUsageSnapshot,
+  PersistedMaterialMarkerClip,
   PersistedProjectClip,
   PersistedProjectClipCompilation,
   PersistedProjectScriptMatchResult,
@@ -86,10 +90,14 @@ const defaultSettings: AppSettingsValues = {
   grok2apiApiKey: "",
   openaiTextModelName: "gpt-4o-mini",
   grok2apiTextModelName: "grok-2-latest",
+  aiVisionProvider: "dashscope",
   aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
   aiVisionApiKey: "",
   aiVisionModelName: "qwen3.6-plus",
   aiVisionFps: "2",
+  geminiVisionBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  geminiVisionApiKey: "",
+  geminiVisionModelName: "gemini-2.5-flash",
   storySearchProvider: "keyword",
   aiSearchProvider: "openai_compatible",
   openaiSearchModelName: "gpt-4o-mini",
@@ -167,6 +175,35 @@ const mergeMaterialIntoList = (previous: MediaItem[], nextItem: MediaItem) => {
   return [nextItem, ...withoutCurrent];
 };
 
+const mergeSceneShotAnalysisIntoMaterial = (
+  currentItem: MediaItem,
+  nextItem: MediaItem,
+  sceneId: string
+): MediaItem => {
+  const currentOutline = currentItem.storyOutline ?? [];
+  const nextScene = nextItem.storyOutline?.find((scene) => scene.id === sceneId);
+
+  if (!nextScene) {
+    return {
+      ...currentItem,
+      ...nextItem,
+    };
+  }
+
+  return {
+    ...currentItem,
+    ...nextItem,
+    storyOutline: currentOutline.map((scene) =>
+      scene.id === sceneId
+        ? {
+            ...scene,
+            ...nextScene,
+          }
+        : scene
+    ),
+  };
+};
+
 const triggerBlobDownload = (blob: Blob, filename: string) => {
   const url = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -180,6 +217,20 @@ const buildProjectClipSequenceSignature = (clipIds: string[]) => clipIds.join("|
 
 const buildProjectCompilationFilename = (projectName: string) =>
   `${projectName.replace(/[\\/:*?"<>|]+/g, " ").trim() || "项目成片"} 成片.mp4`;
+
+const sanitizeExportFilenameBase = (value: string, fallback: string) =>
+  value.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 24) || fallback;
+
+const buildMarkerClipFilename = (label: string) =>
+  `${sanitizeExportFilenameBase(label, "片段")}.mp4`;
+
+const joinDesktopPath = (directory: string, filename: string) => {
+  if (directory.endsWith("/") || directory.endsWith("\\")) {
+    return `${directory}${filename}`;
+  }
+
+  return `${directory}${directory.includes("\\") ? "\\" : "/"}${filename}`;
+};
 
 type DesktopBridge = {
   chooseExportPath?: (defaultPath: string) => Promise<string | null>;
@@ -272,6 +323,9 @@ export default function VideoEditorPage() {
   const [isCompilingProjectClips, setIsCompilingProjectClips] = useState(false);
   const [isExportingProjectClips, setIsExportingProjectClips] = useState(false);
   const [lastExportedCompilationPath, setLastExportedCompilationPath] =
+    useState<string | null>(null);
+  const [isExportingMarkerClips, setIsExportingMarkerClips] = useState(false);
+  const [lastExportedMarkerClipPath, setLastExportedMarkerClipPath] =
     useState<string | null>(null);
   const playerRef = useRef<VideoPlayerHandle>(null);
   const projectScriptPlaybackTimerRef = useRef<number | null>(null);
@@ -605,6 +659,23 @@ export default function VideoEditorPage() {
     setMediaItems((previous) => mergeMaterialIntoList(previous, item));
   };
 
+  const replaceSceneShotAnalysisInState = (
+    mediaId: string,
+    sceneId: string,
+    item: MediaItem
+  ) => {
+    setMediaItems((previous) => {
+      const currentItem = previous.find((entry) => entry.id === mediaId);
+
+      if (!currentItem) {
+        return mergeMaterialIntoList(previous, item);
+      }
+
+      const mergedItem = mergeSceneShotAnalysisIntoMaterial(currentItem, item, sceneId);
+      return mergeMaterialIntoList(previous, mergedItem);
+    });
+  };
+
   const handleUpdateMediaItem = async (id: string, updates: Partial<MediaItem>) => {
     setLibraryError(null);
 
@@ -626,23 +697,32 @@ export default function VideoEditorPage() {
     }
   };
 
-  const updateSceneShotAnalysisInOutline = (
+  const applySceneShotAnalysisPatch = (
     mediaId: string,
     sceneId: string,
-    shotAnalysis: SceneShotAnalysis
+    shotAnalysis: Partial<SceneShotAnalysis> & Pick<SceneShotAnalysis, "status">
   ) => {
-    const targetMedia = mediaItems.find((item) => item.id === mediaId);
-    if (!targetMedia?.storyOutline) {
-      return null;
-    }
+    setMediaItems((previous) =>
+      previous.map((item) => {
+        if (item.id !== mediaId || !item.storyOutline) {
+          return item;
+        }
 
-    return targetMedia.storyOutline.map((scene) =>
-      scene.id === sceneId
-        ? {
-            ...scene,
-            shotAnalysis,
-          }
-        : scene
+        return {
+          ...item,
+          storyOutline: item.storyOutline.map((scene) =>
+            scene.id === sceneId
+              ? {
+                  ...scene,
+                  shotAnalysis: {
+                    ...scene.shotAnalysis,
+                    ...shotAnalysis,
+                  },
+                }
+              : scene
+          ),
+        };
+      })
     );
   };
 
@@ -746,6 +826,8 @@ export default function VideoEditorPage() {
       storySearchProvider?: ProjectItem["storySearchProvider"];
       materialIds?: string[];
       crossAssetSwitchMode?: CrossAssetSwitchMode;
+      markerClipMode?: MarkerClipMode;
+      markerDirectionMode?: MarkerDirectionMode;
       autoTrimIntroOutro?: boolean;
       introTrimSeconds?: number;
       outroTrimSeconds?: number;
@@ -1437,6 +1519,174 @@ export default function VideoEditorPage() {
     }
   };
 
+  const downloadMarkerClipBlob = async (clip: PersistedMaterialMarkerClip) => {
+    const response = await fetch(clip.src);
+    if (!response.ok) {
+      throw new Error(`读取片段文件失败：${clip.label}`);
+    }
+
+    return response.blob();
+  };
+
+  const handleExportMarkerClip = async (markerId: string) => {
+    if (!selectedMedia || selectedMedia.mediaType !== "video") {
+      setLibraryError("请先选中一个视频素材。");
+      return;
+    }
+
+    const marker = (selectedMedia.markers ?? []).find((item) => item.id === markerId);
+    if (!marker) {
+      setLibraryError("目标标记不存在。");
+      return;
+    }
+
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+    const desiredFilename = buildMarkerClipFilename(marker.content);
+
+    setLibraryError(null);
+    setIsExportingMarkerClips(true);
+
+    try {
+      let selectedPath: string | null = null;
+      if (desktopBridge?.chooseExportPath) {
+        selectedPath = await desktopBridge.chooseExportPath(desiredFilename);
+        if (!selectedPath) {
+          return;
+        }
+      }
+
+      if (!currentProjectId) {
+        throw new Error("当前项目不存在。");
+      }
+
+      const clips = await createMaterialMarkerClips(selectedMedia.id, {
+        projectId: currentProjectId,
+        markerId,
+      });
+      const clip = clips[0];
+      if (!clip) {
+        throw new Error("未生成可导出的片段。");
+      }
+
+      const blob = await downloadMarkerClipBlob(clip);
+
+      if (selectedPath && desktopBridge?.saveFile) {
+        const arrayBuffer = await blob.arrayBuffer();
+        const savedPath = await desktopBridge.saveFile(
+          selectedPath,
+          new Uint8Array(arrayBuffer)
+        );
+        setLastExportedMarkerClipPath(savedPath);
+        return;
+      }
+
+      triggerBlobDownload(blob, clip.filename);
+      setLastExportedMarkerClipPath(clip.filename);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "切割标记片段失败。"
+      );
+    } finally {
+      setIsExportingMarkerClips(false);
+    }
+  };
+
+  const handleExportAllMarkerClips = async () => {
+    if (!selectedMedia || selectedMedia.mediaType !== "video") {
+      setLibraryError("请先选中一个视频素材。");
+      return;
+    }
+
+    const markers = selectedMedia.markers ?? [];
+    if (markers.length === 0) {
+      setLibraryError("当前素材还没有标记，无法批量切割。");
+      return;
+    }
+
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    setLibraryError(null);
+    setIsExportingMarkerClips(true);
+
+    try {
+      let selectedDirectory: string | null = null;
+      if (desktopBridge?.chooseDirectory) {
+        selectedDirectory = await desktopBridge.chooseDirectory(selectedMedia.title);
+        if (!selectedDirectory) {
+          return;
+        }
+      }
+
+      if (!currentProjectId) {
+        throw new Error("当前项目不存在。");
+      }
+
+      const clips = await createMaterialMarkerClips(selectedMedia.id, {
+        projectId: currentProjectId,
+      });
+      if (clips.length === 0) {
+        throw new Error("未生成可导出的片段。");
+      }
+
+      if (selectedDirectory && desktopBridge?.saveFile) {
+        const savedPaths: string[] = [];
+
+        for (const clip of clips) {
+          const blob = await downloadMarkerClipBlob(clip);
+          const arrayBuffer = await blob.arrayBuffer();
+          const savedPath = await desktopBridge.saveFile(
+            joinDesktopPath(selectedDirectory, clip.filename),
+            new Uint8Array(arrayBuffer)
+          );
+          savedPaths.push(savedPath);
+        }
+
+        setLastExportedMarkerClipPath(savedPaths[0] ?? selectedDirectory);
+        return;
+      }
+
+      for (const clip of clips) {
+        const blob = await downloadMarkerClipBlob(clip);
+        triggerBlobDownload(blob, clip.filename);
+      }
+
+      setLastExportedMarkerClipPath(`${selectedMedia.title} 标记片段`);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "批量切割标记片段失败。"
+      );
+    } finally {
+      setIsExportingMarkerClips(false);
+    }
+  };
+
+  const handleOpenMarkerClipDirectory = async () => {
+    if (!lastExportedMarkerClipPath) {
+      return;
+    }
+
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.openPath) {
+      setLibraryError("当前环境暂不支持直接打开导出目录。");
+      return;
+    }
+
+    try {
+      await desktopBridge.openPath(lastExportedMarkerClipPath);
+    } catch (error) {
+      setLibraryError(
+        error instanceof Error ? error.message : "打开标记片段导出目录失败。"
+      );
+    }
+  };
+
   const handleMarkStart = () => {
     clearProjectPreviewPlayback();
     playerRef.current?.pause();
@@ -1806,52 +2056,53 @@ export default function VideoEditorPage() {
       return;
     }
 
-    const loadingOutline = updateSceneShotAnalysisInOutline(targetMediaId, sceneId, {
+    applySceneShotAnalysisPatch(targetMediaId, sceneId, {
       status: "loading",
       error: null,
-      summary: targetScene.shotAnalysis?.summary,
-      action: targetScene.shotAnalysis?.action,
-      expressionAndGaze: targetScene.shotAnalysis?.expressionAndGaze,
-      cinematography: targetScene.shotAnalysis?.cinematography,
-      atmosphere: targetScene.shotAnalysis?.atmosphere,
-      commentaryHooks: targetScene.shotAnalysis?.commentaryHooks,
-      updatedAt: targetScene.shotAnalysis?.updatedAt,
     });
-
-    if (loadingOutline) {
-      applyLocalMediaPatch(targetMediaId, {
-        storyOutline: loadingOutline,
-      });
-    }
 
     try {
       const updatedMaterial = await generateMaterialSceneShotAnalysis(targetMediaId, sceneId);
-      replaceMaterialInState(updatedMaterial);
+      replaceSceneShotAnalysisInState(targetMediaId, sceneId, updatedMaterial);
       void refreshUsageSnapshot();
     } catch (error) {
       const message = error instanceof Error ? error.message : "镜头解读生成失败。";
-      const errorOutline = updateSceneShotAnalysisInOutline(targetMediaId, sceneId, {
+      applySceneShotAnalysisPatch(targetMediaId, sceneId, {
         status: "error",
         error: message,
-        summary: targetScene.shotAnalysis?.summary,
-        action: targetScene.shotAnalysis?.action,
-        expressionAndGaze: targetScene.shotAnalysis?.expressionAndGaze,
-        cinematography: targetScene.shotAnalysis?.cinematography,
-        atmosphere: targetScene.shotAnalysis?.atmosphere,
-        commentaryHooks: targetScene.shotAnalysis?.commentaryHooks,
-        updatedAt: targetScene.shotAnalysis?.updatedAt,
       });
-
-      if (errorOutline) {
-        applyLocalMediaPatch(targetMediaId, {
-          storyOutline: errorOutline,
-        });
-        await handleUpdateMediaItem(targetMediaId, {
-          storyOutline: errorOutline,
-        });
-      }
       void refreshUsageSnapshot();
     }
+  };
+
+  const handleGenerateAllSceneShotAnalysis = async (mediaId?: string) => {
+    const targetMediaId = mediaId ?? selectedMediaId;
+    if (!targetMediaId) {
+      return;
+    }
+
+    const targetMedia = mediaItems.find((item) => item.id === targetMediaId);
+    const scenesToGenerate =
+      targetMedia?.storyOutline?.filter((scene) => {
+        const status = scene.shotAnalysis?.status;
+        return status === undefined || status === "idle" || status === "error";
+      }) ?? [];
+
+    if (scenesToGenerate.length === 0) {
+      return;
+    }
+
+    if (selectedMediaId !== targetMediaId) {
+      setSelectedMediaId(targetMediaId);
+    }
+
+    setCurrentSceneId((current) => current ?? scenesToGenerate[0]?.id ?? null);
+
+    await Promise.allSettled(
+      scenesToGenerate.map((scene) =>
+        handleGenerateSceneShotAnalysis(scene.id, targetMediaId)
+      )
+    );
   };
 
   /**
@@ -2160,11 +2411,16 @@ export default function VideoEditorPage() {
                       disabledReason={markerDisabledReason}
                       pendingMarkerTime={pendingMarkerTime}
                       markers={selectedMedia?.markers ?? []}
+                      isExportingMarkerClips={isExportingMarkerClips}
+                      lastExportedMarkerClipPath={lastExportedMarkerClipPath}
                       projectClips={currentProject.scriptClips}
                       selectedClipVersionByItemId={selectedProjectClipVersionByItemId}
                       onMarkStart={handleMarkStart}
                       onMarkEditStart={handleMarkEditStart}
                       onAdjustMarkerTime={handleAdjustMarkerTime}
+                      onExportMarkerClip={handleExportMarkerClip}
+                      onExportAllMarkerClips={handleExportAllMarkerClips}
+                      onOpenMarkerClipDirectory={handleOpenMarkerClipDirectory}
                       onSeekToTime={(time) => playerRef.current?.seekTo(time)}
                       onPreviewProjectClip={handlePreviewProjectClip}
                       onSelectProjectClipVersion={handleSelectProjectClipVersion}
@@ -2211,6 +2467,7 @@ export default function VideoEditorPage() {
                   onSearchResultSelect={handleSelectOutlineSearchResult}
                   onSceneSubtitleSelect={handleSceneSubtitleSelect}
                   onGenerateShotAnalysis={handleGenerateSceneShotAnalysis}
+                  onGenerateAllShotAnalysis={handleGenerateAllSceneShotAnalysis}
                 />
               </div>
             </ResizablePanel>

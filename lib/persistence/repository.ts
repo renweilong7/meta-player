@@ -26,6 +26,8 @@ import {
   AiUsageProvider,
   AiUsageStatus,
   CrossAssetSwitchMode,
+  MarkerClipMode,
+  MarkerDirectionMode,
   PersistedAiUsageRecord,
   PersistedAiUsageSnapshot,
   PersistedAiUsageSummary,
@@ -65,10 +67,14 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   grok2apiApiKey: "",
   openaiTextModelName: "gpt-4o-mini",
   grok2apiTextModelName: "grok-2-latest",
+  aiVisionProvider: "dashscope",
   aiVisionBaseUrl: "https://dashscope.aliyuncs.com/api/v1",
   aiVisionApiKey: "",
   aiVisionModelName: "qwen3.6-plus",
   aiVisionFps: "2",
+  geminiVisionBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  geminiVisionApiKey: "",
+  geminiVisionModelName: "gemini-2.5-flash",
   storySearchProvider: "keyword",
   aiSearchProvider: "openai_compatible",
   openaiSearchModelName: "gpt-4o-mini",
@@ -108,6 +114,8 @@ type ProjectRow = {
   description: string | null;
   story_search_provider: PersistedProject["storySearchProvider"];
   cross_asset_switch_mode: CrossAssetSwitchMode;
+  marker_clip_mode: MarkerClipMode;
+  marker_direction_mode: MarkerDirectionMode;
   auto_trim_intro_outro: number;
   intro_trim_seconds: number;
   outro_trim_seconds: number;
@@ -392,6 +400,8 @@ const getProjectScriptAudioUrl = (projectId: string, itemId: string) =>
   `/api/projects/${projectId}/script-items/${itemId}/audio`;
 const getProjectClipFileUrl = (projectId: string, clipId: string) =>
   `/api/projects/${projectId}/script-clips/${clipId}/file`;
+const getMaterialMarkerClipFileUrl = (materialId: string, clipId: string) =>
+  `/api/materials/${materialId}/marker-clips/${clipId}/file`;
 
 const getProjectClipCompilationFileUrl = (projectId: string, compilationId: string) =>
   `/api/projects/${projectId}/script-clip-compilations/${compilationId}/file`;
@@ -515,6 +525,8 @@ const mapRowToProject = (row: ProjectRow): PersistedProject => ({
   materialIds: parseProjectMaterialIds(row.material_ids_json),
   storySearchProvider: row.story_search_provider === "llm" ? "llm" : "keyword",
   crossAssetSwitchMode: row.cross_asset_switch_mode ?? "frame_hold",
+  markerClipMode: row.marker_clip_mode ?? "precise",
+  markerDirectionMode: row.marker_direction_mode ?? "end",
   autoTrimIntroOutro: row.auto_trim_intro_outro === 1,
   introTrimSeconds: normalizeTrimSeconds(row.intro_trim_seconds),
   outroTrimSeconds: normalizeTrimSeconds(row.outro_trim_seconds),
@@ -811,6 +823,9 @@ export const getSettings = (): PersistedAppSettings => {
       stored.get("grok2apiTextModelName") ??
       stored.get("aiModelName") ??
       SETTINGS_DEFAULTS.grok2apiTextModelName,
+    aiVisionProvider:
+      (stored.get("aiVisionProvider") as PersistedAppSettings["aiVisionProvider"]) ??
+      SETTINGS_DEFAULTS.aiVisionProvider,
     aiVisionBaseUrl:
       stored.get("aiVisionBaseUrl") ?? SETTINGS_DEFAULTS.aiVisionBaseUrl,
     aiVisionApiKey:
@@ -818,6 +833,12 @@ export const getSettings = (): PersistedAppSettings => {
     aiVisionModelName:
       stored.get("aiVisionModelName") ?? SETTINGS_DEFAULTS.aiVisionModelName,
     aiVisionFps: stored.get("aiVisionFps") ?? SETTINGS_DEFAULTS.aiVisionFps,
+    geminiVisionBaseUrl:
+      stored.get("geminiVisionBaseUrl") ?? SETTINGS_DEFAULTS.geminiVisionBaseUrl,
+    geminiVisionApiKey:
+      stored.get("geminiVisionApiKey") ?? SETTINGS_DEFAULTS.geminiVisionApiKey,
+    geminiVisionModelName:
+      stored.get("geminiVisionModelName") ?? SETTINGS_DEFAULTS.geminiVisionModelName,
     storySearchProvider: normalizeProjectSearchProvider(
       (stored.get("storySearchProvider") as PersistedAppSettings["storySearchProvider"]) ??
         SETTINGS_DEFAULTS.storySearchProvider
@@ -869,10 +890,14 @@ export const saveSettings = (settings: PersistedAppSettings) => {
       settings.aiTextProvider === "grok2api"
         ? settings.grok2apiTextModelName
         : settings.openaiTextModelName,
+    aiVisionProvider: settings.aiVisionProvider,
     aiVisionBaseUrl: settings.aiVisionBaseUrl,
     aiVisionApiKey: settings.aiVisionApiKey,
     aiVisionModelName: settings.aiVisionModelName,
     aiVisionFps: settings.aiVisionFps,
+    geminiVisionBaseUrl: settings.geminiVisionBaseUrl,
+    geminiVisionApiKey: settings.geminiVisionApiKey,
+    geminiVisionModelName: settings.geminiVisionModelName,
     storySearchProvider: settings.storySearchProvider,
     aiSearchProvider: settings.aiSearchProvider,
     openaiSearchModelName: settings.openaiSearchModelName,
@@ -952,6 +977,8 @@ const listProjectRows = (): ProjectRow[] => {
         p.description,
         p.story_search_provider,
         p.cross_asset_switch_mode,
+        p.marker_clip_mode,
+        p.marker_direction_mode,
         p.auto_trim_intro_outro,
         p.intro_trim_seconds,
         p.outro_trim_seconds,
@@ -985,6 +1012,8 @@ const getProjectRowById = (id: string) => {
         p.description,
         p.story_search_provider,
         p.cross_asset_switch_mode,
+        p.marker_clip_mode,
+        p.marker_direction_mode,
         p.auto_trim_intro_outro,
         p.intro_trim_seconds,
         p.outro_trim_seconds,
@@ -1859,6 +1888,8 @@ export const createProject = (input: ProjectCreateInput) => {
       description,
       story_search_provider,
       cross_asset_switch_mode,
+      marker_clip_mode,
+      marker_direction_mode,
       auto_trim_intro_outro,
       intro_trim_seconds,
       outro_trim_seconds,
@@ -1870,7 +1901,7 @@ export const createProject = (input: ProjectCreateInput) => {
       created_at,
       updated_at
     )
-    VALUES (?, ?, ?, ?, 'frame_hold', 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
+    VALUES (?, ?, ?, ?, 'frame_hold', 'precise', 'end', 0, 0, 0, NULL, NULL, NULL, NULL, NULL, ?, ?)
   `).run(
     projectId,
     normalizedName,
@@ -1912,6 +1943,14 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
     input.crossAssetSwitchMode !== undefined
       ? input.crossAssetSwitchMode
       : current.cross_asset_switch_mode;
+  const nextMarkerClipMode =
+    input.markerClipMode !== undefined
+      ? input.markerClipMode
+      : current.marker_clip_mode;
+  const nextMarkerDirectionMode =
+    input.markerDirectionMode !== undefined
+      ? input.markerDirectionMode
+      : current.marker_direction_mode;
   const nextAutoTrimIntroOutro =
     input.autoTrimIntroOutro !== undefined
       ? input.autoTrimIntroOutro
@@ -1953,6 +1992,8 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
           description = ?,
           story_search_provider = ?,
           cross_asset_switch_mode = ?,
+          marker_clip_mode = ?,
+          marker_direction_mode = ?,
           auto_trim_intro_outro = ?,
           intro_trim_seconds = ?,
           outro_trim_seconds = ?,
@@ -1969,6 +2010,8 @@ export const updateProject = (id: string, input: ProjectUpdateInput) => {
         nextDescription,
         nextStorySearchProvider,
         nextCrossAssetSwitchMode,
+        nextMarkerClipMode,
+        nextMarkerDirectionMode,
         nextAutoTrimIntroOutro ? 1 : 0,
         nextIntroTrimSeconds,
         nextOutroTrimSeconds,
@@ -2212,6 +2255,97 @@ const sanitizeClipLabel = (value: string) =>
 
 const escapeFfmpegConcatPath = (value: string) => value.replace(/'/g, "'\\''");
 
+const getMaterialMarkerClipDirectory = (materialId: string) => {
+  const settings = getSettings();
+  return join(settings.materialSavePath, "marker-clips", materialId);
+};
+
+const getMaterialMarkerClipFileDescriptor = (materialId: string, clipId: string) => {
+  const directory = getMaterialMarkerClipDirectory(materialId);
+  if (!existsSync(directory)) {
+    return null;
+  }
+
+  const filename = readdirSync(directory).find((item) => item.startsWith(`${clipId}-`));
+  if (!filename) {
+    return null;
+  }
+
+  return {
+    filename,
+    absolutePath: join(directory, filename),
+  };
+};
+
+const buildUniqueMarkerClipFilenames = (
+  markers: Array<{ id: string; content: string }>
+) => {
+  const usedCounts = new Map<string, number>();
+
+  return new Map(
+    markers.map((marker) => {
+      const baseLabel = sanitizeClipLabel(marker.content);
+      const nextCount = (usedCounts.get(baseLabel) ?? 0) + 1;
+      usedCounts.set(baseLabel, nextCount);
+      const resolvedLabel = nextCount === 1 ? baseLabel : `${baseLabel} ${nextCount}`;
+
+      return [marker.id, `${resolvedLabel}.mp4`];
+    })
+  );
+};
+
+const getSortedMaterialMarkers = (material: PersistedMaterial) =>
+  [...(material.markers ?? [])].sort((left, right) => {
+    if (left.time !== right.time) {
+      return left.time - right.time;
+    }
+
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+
+const resolveMarkerClipRange = (input: {
+  markers: PersistedMaterial["markers"];
+  markerId: string;
+  markerDirectionMode: MarkerDirectionMode;
+  videoDurationSeconds: number;
+}) => {
+  const markers = [...(input.markers ?? [])].sort((left, right) => {
+    if (left.time !== right.time) {
+      return left.time - right.time;
+    }
+
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+  const markerIndex = markers.findIndex((item) => item.id === input.markerId);
+  if (markerIndex < 0) {
+    throw new Error("指定标记不存在，无法切割片段。");
+  }
+
+  const currentMarker = markers[markerIndex];
+  const previousMarker = markerIndex > 0 ? markers[markerIndex - 1] : null;
+  const nextMarker = markerIndex < markers.length - 1 ? markers[markerIndex + 1] : null;
+
+  if (input.markerDirectionMode === "start") {
+    const startSeconds = Math.max(currentMarker.time, 0);
+    const endSeconds = Math.max(nextMarker?.time ?? input.videoDurationSeconds, startSeconds);
+
+    return {
+      startSeconds,
+      endSeconds,
+      durationSeconds: endSeconds - startSeconds,
+    };
+  }
+
+  const startSeconds = Math.max(previousMarker?.time ?? 0, 0);
+  const endSeconds = Math.max(currentMarker.time, startSeconds);
+
+  return {
+    startSeconds,
+    endSeconds,
+    durationSeconds: endSeconds - startSeconds,
+  };
+};
+
 const getProjectClipCompilationDirectory = (projectId: string) => {
   const settings = getSettings();
   return join(settings.materialSavePath, "project-clip-compilations", projectId);
@@ -2357,6 +2491,132 @@ export const createProjectScriptClip = (input: {
   }
 };
 
+export const createMaterialMarkerClips = (input: {
+  materialId: string;
+  projectId: string;
+  markerId?: string;
+}) => {
+  const material = getMaterialById(input.materialId);
+  if (!material || material.mediaType !== "video" || !material.absolutePath) {
+    throw new Error("当前素材不是可裁剪的视频。");
+  }
+
+  const project = getProjectById(input.projectId);
+  if (!project) {
+    throw new Error("项目不存在。");
+  }
+
+  const markers = getSortedMaterialMarkers(material);
+  if (markers.length === 0) {
+    throw new Error("当前素材还没有标记，无法切割片段。");
+  }
+
+  const targetMarkers = input.markerId
+    ? markers.filter((marker) => marker.id === input.markerId)
+    : markers;
+
+  if (targetMarkers.length === 0) {
+    throw new Error("指定标记不存在，无法切割片段。");
+  }
+
+  const settings = getSettings();
+  const outputDirectory = getMaterialMarkerClipDirectory(input.materialId);
+  const exportFilenames = buildUniqueMarkerClipFilenames(targetMarkers);
+  const videoDurationSeconds = probeVideoDurationSeconds(material.absolutePath, settings);
+  ensureDirectory(outputDirectory);
+
+  return targetMarkers.map((marker) => {
+    const { startSeconds, endSeconds, durationSeconds } = resolveMarkerClipRange({
+      markers,
+      markerId: marker.id,
+      markerDirectionMode: project.markerDirectionMode ?? "end",
+      videoDurationSeconds,
+    });
+
+    if (durationSeconds <= 0) {
+      throw new Error(`标记“${marker.content}”的时间点无效，无法切割片段。`);
+    }
+
+    const tempDirectory = mkdtempSync(join(tmpdir(), "meta-player-marker-clip-"));
+    const tempOutputPath = join(tempDirectory, "clip.mp4");
+
+    try {
+      execFileSync(
+        getFfmpegPath(settings),
+        project.markerClipMode === "fast"
+          ? [
+              "-y",
+              "-ss",
+              String(startSeconds),
+              "-t",
+              String(durationSeconds),
+              "-i",
+              material.absolutePath,
+              "-map",
+              "0:v:0",
+              "-map",
+              "0:a?",
+              "-c",
+              "copy",
+              "-movflags",
+              "+faststart",
+              tempOutputPath,
+            ]
+          : [
+              "-y",
+              "-ss",
+              String(startSeconds),
+              "-t",
+              String(durationSeconds),
+              "-i",
+              material.absolutePath,
+              "-map",
+              "0:v:0",
+              "-map",
+              "0:a?",
+              "-c:v",
+              "libx264",
+              "-preset",
+              "veryfast",
+              "-c:a",
+              "aac",
+              "-movflags",
+              "+faststart",
+              tempOutputPath,
+            ],
+        {
+          stdio: "ignore",
+        }
+      );
+
+      const clipId = randomUUID();
+      const exportFilename =
+        exportFilenames.get(marker.id) ?? `${sanitizeClipLabel(marker.content)}.mp4`;
+      const storedAbsolutePath = join(outputDirectory, `${clipId}-${exportFilename}`);
+      copyFileSync(tempOutputPath, storedAbsolutePath);
+
+      const stats = statSync(storedAbsolutePath);
+      const now = toIsoNow();
+
+      return {
+        id: clipId,
+        markerId: marker.id,
+        label: marker.content,
+        filename: exportFilename,
+        absolutePath: storedAbsolutePath,
+        fileSize: stats.size,
+        startSeconds,
+        endSeconds,
+        durationSeconds,
+        src: getMaterialMarkerClipFileUrl(input.materialId, clipId),
+        createdAt: formatAddedAt(now),
+      };
+    } finally {
+      rmSync(tempDirectory, { recursive: true, force: true });
+    }
+  });
+};
+
 export const compileProjectClips = (input: {
   projectId: string;
   clipIds: string[];
@@ -2453,6 +2713,9 @@ export const getProjectClipCompilationFileById = (
   projectId: string,
   compilationId: string
 ) => getProjectClipCompilationFileDescriptor(projectId, compilationId);
+
+export const getMaterialMarkerClipFileById = (materialId: string, clipId: string) =>
+  getMaterialMarkerClipFileDescriptor(materialId, clipId);
 
 export const deleteProject = (id: string) => {
   const database = getDatabase();
