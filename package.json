@@ -20,6 +20,9 @@
     "appId": "com.renyi.meta-player",
     "productName": "Meta Player",
     "asar": true,
+    "asarUnpack": [
+      "server/**/*"
+    ],
     "compression": "maximum",
     "electronDist": "node_modules/electron/dist",
     "icon": "build/icons/icon.png",
@@ -29,16 +32,10 @@
     },
     "files": [
       "electron/**/*",
+      "server/**/*",
       "package.json"
     ],
     "extraResources": [
-      {
-        "from": "dist/app/server",
-        "to": "server",
-        "filter": [
-          "**/*"
-        ]
-      },
       {
         "from": "dist/app/scripts",
         "to": "python-scripts",

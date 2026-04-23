@@ -90,7 +90,7 @@ const reportStartupError = (title, error) => {
 const resolveProductionServerPath = () => {
   const appPath = app.getAppPath();
   const candidates = [
-    path.join(process.resourcesPath, "server", "server.js"),
+    path.join(process.resourcesPath, "app.asar.unpacked", "server", "server.js"),
     path.join(appPath, "server", "server.js"),
     path.join(appPath, "dist", "app", "server", "server.js"),
   ];
