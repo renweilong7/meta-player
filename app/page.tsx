@@ -10,7 +10,6 @@ import {
   SettingsPanel,
 } from "@/components/settings-panel";
 import { UserPanel } from "@/components/user-panel";
-import { UnauthorizedHome } from "@/components/unauthorized-home";
 import { VideoPlayer, type VideoPlayerHandle } from "@/components/video-player";
 import {
   StoryOutline,
@@ -25,8 +24,6 @@ import {
 import {
   fetchLibrarySnapshot,
   fetchAiUsageSnapshot,
-  fetchAuthorizationSnapshot,
-  refreshAuthorizationSnapshot,
   validateMediaToolExecutables,
   importMaterials,
   indexMaterialOutline,
@@ -51,8 +48,6 @@ import {
   installGlobalClientDiagnostics,
   reportClientDiagnosticEvent,
 } from "@/lib/observability/client";
-import { AuthorizationSnapshot } from "@/lib/license/types";
-import { hasAuthorizedFeature, isAuthorizedStatus } from "@/lib/license/utils";
 import {
   MaterialImportInput,
   CrossAssetSwitchMode,
@@ -311,13 +306,8 @@ export default function VideoEditorPage() {
     message: string;
   } | null>(null);
   const [isLaunchingBrowserCdp, setIsLaunchingBrowserCdp] = useState(false);
-  const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
-  const [authorizationError, setAuthorizationError] = useState<string | null>(null);
-  const [authorization, setAuthorization] = useState<AuthorizationSnapshot | null>(
-    null
-  );
   const [pendingOutlineSearchResult, setPendingOutlineSearchResult] =
     useState<StoryOutlineSearchResult | null>(null);
   const [outlineSearchQuery, setOutlineSearchQuery] = useState("");
@@ -372,31 +362,6 @@ export default function VideoEditorPage() {
   const projectScriptPlaybackTimerRef = useRef<number | null>(null);
 
   useEffect(() => installGlobalClientDiagnostics(), []);
-
-  const loadAuthorizationSnapshot = async (mode: "initial" | "refresh" = "initial") => {
-    if (mode === "refresh") {
-      setIsRefreshingAuthorization(true);
-    }
-
-    try {
-      const snapshot =
-        mode === "refresh"
-          ? await refreshAuthorizationSnapshot()
-          : await fetchAuthorizationSnapshot();
-      setAuthorization(snapshot);
-      setAuthorizationError(null);
-      return snapshot;
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "读取授权状态失败。";
-      setAuthorizationError(message);
-      throw error;
-    } finally {
-      if (mode === "refresh") {
-        setIsRefreshingAuthorization(false);
-      }
-    }
-  };
 
   const refreshUsageSnapshot = async () => {
     try {
@@ -528,33 +493,14 @@ export default function VideoEditorPage() {
   const hasPendingSettingsChanges =
     JSON.stringify(normalizeAppSettingsValues(settings)) !==
     JSON.stringify(normalizeAppSettingsValues(savedSettings));
-  const isAuthorized = isAuthorizedStatus(authorization?.status);
-  const canManageProjects = hasAuthorizedFeature(
-    authorization,
-    "base.project_management"
-  );
-  const canManageMaterials = hasAuthorizedFeature(
-    authorization,
-    "base.material_management"
-  );
-  const canUsePlayback = hasAuthorizedFeature(authorization, "base.playback");
-  const canUseOutlineBasic = hasAuthorizedFeature(
-    authorization,
-    "base.outline_basic"
-  );
-  const canUseOutlineSearch = hasAuthorizedFeature(
-    authorization,
-    "base.search_basic"
-  );
-  const canManageSettings = hasAuthorizedFeature(
-    authorization,
-    "base.settings_basic"
-  );
-  const canManageMarkers = hasAuthorizedFeature(authorization, "pro.marker");
-  const markerDisabledReason =
-    selectedMedia && !canManageMarkers
-      ? "当前设备未授权，标记与审片功能暂不可用。"
-      : null;
+  const canManageProjects = true;
+  const canManageMaterials = true;
+  const canUsePlayback = true;
+  const canUseOutlineBasic = true;
+  const canUseOutlineSearch = true;
+  const canManageSettings = true;
+  const canManageMarkers = true;
+  const markerDisabledReason = null;
 
   const clearProjectPreviewPlayback = () => {
     setPreviewProjectClip(null);
@@ -643,37 +589,6 @@ export default function VideoEditorPage() {
       isActive = false;
     };
   }, []);
-
-  useEffect(() => {
-    let isActive = true;
-
-    void loadAuthorizationSnapshot("initial").catch((error) => {
-      void reportClientDiagnosticEvent({
-        level: "warn",
-        event: "authorization.initial_load_failed",
-        error,
-      });
-
-      if (!isActive) {
-        return;
-      }
-    });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (
-      authorization &&
-      !isAuthorized &&
-      activeMenu !== "home" &&
-      activeMenu !== "user"
-    ) {
-      setActiveMenu("home");
-    }
-  }, [activeMenu, authorization, isAuthorized]);
 
   /**
    * 当项目范围内的当前选中素材被删除或切换项目后，自动切到列表第一项。
@@ -2036,18 +1951,6 @@ export default function VideoEditorPage() {
     }
   };
 
-  const handleRefreshAuthorization = async () => {
-    setLibraryError(null);
-
-    try {
-      await loadAuthorizationSnapshot("refresh");
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "刷新授权状态失败。";
-      setLibraryError(message);
-    }
-  };
-
   const handleExportDiagnostics = async () => {
     const desktopBridge = (
       window as typeof window & { metaPlayerDesktop?: DesktopBridge }
@@ -2396,15 +2299,7 @@ export default function VideoEditorPage() {
     clearProjectScriptPlaybackTimer();
   }, []);
 
-  const visibleMenuIds = isAuthorized
-    ? [
-        "home",
-        "videos",
-        "usage",
-        "user",
-        ...(canManageSettings ? ["settings"] : []),
-      ]
-    : ["home", "user"];
+  const visibleMenuIds = ["home", "videos", "usage", "user", "settings"];
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
@@ -2415,9 +2310,7 @@ export default function VideoEditorPage() {
         visibleMenuIds={visibleMenuIds}
       />
 
-      {!isAuthorized && activeMenu === "home" ? (
-        <UnauthorizedHome onOpenUserPage={() => setActiveMenu("user")} />
-      ) : activeMenu === "settings" && canManageSettings ? (
+      {activeMenu === "settings" && canManageSettings ? (
         <SettingsPanel
           values={settings}
           hasPendingChanges={hasPendingSettingsChanges}
@@ -2438,11 +2331,7 @@ export default function VideoEditorPage() {
         />
       ) : activeMenu === "user" ? (
         <UserPanel
-          authorization={authorization}
-          authorizationError={authorizationError}
-          isRefreshingAuthorization={isRefreshingAuthorization}
           isExportingDiagnostics={isExportingDiagnostics}
-          onRefreshAuthorization={handleRefreshAuthorization}
           onExportDiagnostics={handleExportDiagnostics}
         />
       ) : activeMenu === "usage" ? (

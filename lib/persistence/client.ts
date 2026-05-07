@@ -20,7 +20,6 @@ import {
   ProjectCreateInput,
   ProjectUpdateInput,
 } from "@/lib/persistence/types";
-import { AuthorizationSnapshot } from "@/lib/license/types";
 import { StoryOutlineSearchResult } from "@/lib/story-outline/search";
 
 const getRequestUrlLabel = (input: RequestInfo | URL) =>
@@ -125,55 +124,6 @@ export const postAiUsageRecord = async (
     })
   );
 };
-
-export const fetchAuthorizationSnapshot =
-  async (): Promise<AuthorizationSnapshot> => {
-    const abortController = new AbortController();
-    const timeout = window.setTimeout(() => {
-      abortController.abort();
-    }, 5000);
-
-    let response: Response;
-
-    try {
-      response = await assertOk(
-        await fetchWithDiagnostics("/api/device-identity", {
-          cache: "no-store",
-          signal: abortController.signal,
-        })
-      );
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new Error("读取设备授权信息超时，请稍后重试。");
-      }
-
-      throw error;
-    } finally {
-      window.clearTimeout(timeout);
-    }
-
-    return (await response.json()) as AuthorizationSnapshot;
-  };
-
-/**
- * 手动刷新授权时，先触发一次服务端同步，再重新拉取用户页展示快照。
- *
- * 这样做的原因是：
- * - `/api/license` 更偏“执行同步动作”。
- * - `/api/device-identity` 返回的是给 UI 展示的完整授权快照。
- *
- * 两步串起来后，用户点击“刷新授权”时能立即看到后台最新结果。
- */
-export const refreshAuthorizationSnapshot =
-  async (): Promise<AuthorizationSnapshot> => {
-    await assertOk(
-      await fetchWithDiagnostics("/api/license", {
-        method: "POST",
-      })
-    );
-
-    return fetchAuthorizationSnapshot();
-  };
 
 export const importMaterials = async (
   inputs: MaterialImportInput[],

@@ -557,7 +557,7 @@ export function MediaLibrary({
             <p className="mt-2 max-w-xs text-xs leading-5 text-muted-foreground">
               {canManageMaterials
                 ? "点击右上角的加号，把视频或图片导入到当前项目。"
-                : "当前授权不包含素材管理能力。"}
+                : "当前不能导入素材。"}
             </p>
           </div>
         ) : (
