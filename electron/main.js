@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require("electron");
+const { execFileSync, spawn } = require("node:child_process");
 const {
   appendFileSync,
   copyFileSync,
@@ -8,6 +9,7 @@ const {
   writeFileSync,
 } = require("node:fs");
 const http = require("node:http");
+const net = require("node:net");
 const path = require("node:path");
 
 const isDev = !app.isPackaged;
@@ -16,6 +18,7 @@ const PRODUCTION_HOST = "127.0.0.1";
 
 let productionServerStartupPromise = null;
 let productionHttpServer = null;
+let launchedBrowserSession = null;
 
 const getDefaultAppDataDirectory = () => path.join(process.cwd(), ".meta-player");
 
@@ -87,6 +90,212 @@ const reportStartupError = (title, error) => {
     `${detail}\n\n启动日志位置：${getStartupLogPath()}`
   );
 };
+
+const delay = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+const findAvailablePort = () =>
+  new Promise((resolve, reject) => {
+    const server = net.createServer();
+
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port =
+        typeof address === "object" && address ? address.port : null;
+
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        if (!port) {
+          reject(new Error("无法分配可用的 CDP 端口。"));
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+
+const fetchJson = (url) =>
+  new Promise((resolve, reject) => {
+    const request = http.get(url, (response) => {
+      if ((response.statusCode ?? 500) >= 400) {
+        reject(new Error(`请求失败，状态码 ${response.statusCode ?? 500}`));
+        response.resume();
+        return;
+      }
+
+      let payload = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        payload += chunk;
+      });
+      response.on("end", () => {
+        try {
+          resolve(JSON.parse(payload));
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    request.once("error", reject);
+    request.setTimeout(1000, () => {
+      request.destroy(new Error("CDP 连接超时。"));
+    });
+  });
+
+const stopChildProcess = (childProcess) => {
+  if (!childProcess || childProcess.killed) {
+    return;
+  }
+
+  try {
+    childProcess.kill("SIGTERM");
+  } catch (error) {
+    writeMainLog("warn", "browser.cdp_test.kill_failed", {
+      detail: formatError(error),
+    });
+  }
+};
+
+const waitForCdpEndpoint = async (port) => {
+  const endpoint = `http://127.0.0.1:${port}/json/version`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      const payload = await fetchJson(endpoint);
+      return {
+        endpoint,
+        payload,
+      };
+    } catch (error) {
+      lastError = error;
+      await delay(500);
+    }
+  }
+
+  throw lastError ?? new Error("未能在超时时间内连上 CDP。");
+};
+
+const waitForChildProcessSpawn = (childProcess) =>
+  new Promise((resolve, reject) => {
+    const handleSpawn = () => {
+      childProcess.removeListener("error", handleError);
+      resolve();
+    };
+    const handleError = (error) => {
+      childProcess.removeListener("spawn", handleSpawn);
+      reject(error);
+    };
+
+    childProcess.once("spawn", handleSpawn);
+    childProcess.once("error", handleError);
+  });
+
+const resolveMacAppBundleExecutable = (appBundlePath) => {
+  const infoPlistPath = path.join(appBundlePath, "Contents", "Info.plist");
+
+  if (!existsSync(infoPlistPath)) {
+    throw new Error("所选 .app 内未找到 Info.plist，请改为选择真实浏览器应用。");
+  }
+
+  let executableName = "";
+
+  try {
+    executableName = execFileSync(
+      "/usr/bin/defaults",
+      ["read", path.join(appBundlePath, "Contents", "Info"), "CFBundleExecutable"],
+      { encoding: "utf8" }
+    ).trim();
+  } catch (error) {
+    throw new Error(
+      `无法解析 .app 对应的可执行文件：${formatError(error)}`
+    );
+  }
+
+  if (!executableName) {
+    throw new Error("未能从 .app 中解析到浏览器可执行文件名。");
+  }
+
+  const executablePath = path.join(
+    appBundlePath,
+    "Contents",
+    "MacOS",
+    executableName
+  );
+
+  if (!existsSync(executablePath)) {
+    throw new Error("解析到的浏览器可执行文件不存在，请检查应用安装是否完整。");
+  }
+
+  return executablePath;
+};
+
+const normalizeBrowserLaunchInput = (input) => {
+  const configuredPath =
+    typeof input?.executablePath === "string" ? input.executablePath.trim() : "";
+  const userDataDir =
+    typeof input?.userDataDir === "string" ? input.userDataDir.trim() : "";
+
+  if (!configuredPath) {
+    throw new Error("请先填写浏览器执行路径。");
+  }
+
+  if (!existsSync(configuredPath)) {
+    throw new Error("浏览器执行路径不存在，请检查后重试。");
+  }
+
+  if (!userDataDir) {
+    throw new Error("请先填写 user-data-dir。");
+  }
+
+  mkdirSync(userDataDir, { recursive: true });
+
+  const executablePath =
+    process.platform === "darwin" && configuredPath.endsWith(".app")
+      ? resolveMacAppBundleExecutable(configuredPath)
+      : configuredPath;
+
+  return {
+    configuredPath,
+    executablePath,
+    userDataDir,
+  };
+};
+
+const buildBrowserLaunchArgs = (port, userDataDir) => [
+  `--remote-debugging-port=${port}`,
+  `--user-data-dir=${userDataDir}`,
+  "--no-first-run",
+  "--no-default-browser-check",
+  "about:blank",
+];
+
+const toBrowserSessionPayload = (input) => ({
+  ok: true,
+  endpoint: input.endpoint,
+  browser: typeof input.payload?.Browser === "string" ? input.payload.Browser : null,
+  protocolVersion:
+    typeof input.payload?.["Protocol-Version"] === "string"
+      ? input.payload["Protocol-Version"]
+      : null,
+  webSocketDebuggerUrl:
+    typeof input.payload?.webSocketDebuggerUrl === "string"
+      ? input.payload.webSocketDebuggerUrl
+      : null,
+  port: input.port,
+  executablePath: input.executablePath,
+  userDataDir: input.userDataDir,
+  message: input.message,
+});
 
 const resolveProductionAppRoot = () => {
   const appPath = app.getAppPath();
@@ -275,6 +484,22 @@ app.whenReady().then(() => {
     return result.filePaths[0];
   });
 
+  ipcMain.handle("meta-player:choose-file", async (_event, defaultPath, filters) => {
+    const browserWindow = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const result = await dialog.showOpenDialog(browserWindow ?? undefined, {
+      title: "选择文件",
+      defaultPath: typeof defaultPath === "string" && defaultPath.trim() ? defaultPath : undefined,
+      properties: ["openFile"],
+      filters: Array.isArray(filters) ? filters : undefined,
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    return result.filePaths[0];
+  });
+
   ipcMain.handle("meta-player:open-path", async (_event, targetPath) => {
     if (typeof targetPath !== "string" || !targetPath.trim()) {
       return "";
@@ -353,6 +578,140 @@ app.whenReady().then(() => {
       byteLength: Array.isArray(bytes) ? bytes.length : Buffer.from(bytes).length,
     });
     return targetPath;
+  });
+
+  ipcMain.handle("meta-player:test-browser-cdp", async (_event, input) => {
+    const { executablePath, userDataDir } = normalizeBrowserLaunchInput(input);
+    const port = await findAvailablePort();
+    const args = buildBrowserLaunchArgs(port, userDataDir);
+
+    writeMainLog("info", "browser.cdp_test.starting", {
+      executablePath,
+      userDataDir,
+      port,
+    });
+
+    const childProcess = spawn(executablePath, args, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+
+    try {
+      await waitForChildProcessSpawn(childProcess);
+      const { endpoint, payload } = await waitForCdpEndpoint(port);
+
+      writeMainLog("info", "browser.cdp_test.succeeded", {
+        executablePath,
+        userDataDir,
+        port,
+        endpoint,
+        browser: payload?.Browser ?? null,
+      });
+
+      return toBrowserSessionPayload({
+        port,
+        executablePath,
+        userDataDir,
+        endpoint,
+        payload,
+        message: "已成功启动浏览器并连接到 CDP。",
+      });
+    } catch (error) {
+      writeMainLog("warn", "browser.cdp_test.failed", {
+        executablePath,
+        userDataDir,
+        port,
+        detail: formatError(error),
+      });
+      throw error;
+    } finally {
+      stopChildProcess(childProcess);
+    }
+  });
+
+  ipcMain.handle("meta-player:launch-browser-cdp", async (_event, input) => {
+    const { executablePath, userDataDir } = normalizeBrowserLaunchInput(input);
+
+    if (
+      launchedBrowserSession &&
+      !launchedBrowserSession.childProcess.killed &&
+      launchedBrowserSession.executablePath === executablePath &&
+      launchedBrowserSession.userDataDir === userDataDir
+    ) {
+      return launchedBrowserSession.result;
+    }
+
+    if (launchedBrowserSession) {
+      stopChildProcess(launchedBrowserSession.childProcess);
+      launchedBrowserSession = null;
+    }
+
+    const port = await findAvailablePort();
+    const args = buildBrowserLaunchArgs(port, userDataDir);
+
+    writeMainLog("info", "browser.cdp_launch.starting", {
+      executablePath,
+      userDataDir,
+      port,
+    });
+
+    const childProcess = spawn(executablePath, args, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+
+    childProcess.once("exit", (code, signal) => {
+      writeMainLog("info", "browser.cdp_launch.exited", {
+        executablePath,
+        userDataDir,
+        port,
+        code,
+        signal,
+      });
+
+      if (launchedBrowserSession?.childProcess === childProcess) {
+        launchedBrowserSession = null;
+      }
+    });
+
+    try {
+      await waitForChildProcessSpawn(childProcess);
+      const { endpoint, payload } = await waitForCdpEndpoint(port);
+      const result = toBrowserSessionPayload({
+        port,
+        executablePath,
+        userDataDir,
+        endpoint,
+        payload,
+        message: "浏览器已启动，可直接通过 CDP 连接。",
+      });
+
+      launchedBrowserSession = {
+        childProcess,
+        executablePath,
+        userDataDir,
+        result,
+      };
+
+      writeMainLog("info", "browser.cdp_launch.succeeded", {
+        executablePath,
+        userDataDir,
+        port,
+        endpoint,
+        browser: payload?.Browser ?? null,
+      });
+
+      return result;
+    } catch (error) {
+      stopChildProcess(childProcess);
+      writeMainLog("warn", "browser.cdp_launch.failed", {
+        executablePath,
+        userDataDir,
+        port,
+        detail: formatError(error),
+      });
+      throw error;
+    }
   });
 
   void createWindow().catch((error) => {

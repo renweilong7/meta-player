@@ -59,6 +59,8 @@ const SETTINGS_DEFAULTS: PersistedAppSettings = {
   defaultManagedImport: false,
   ffmpegExecutablePath: "",
   ffprobeExecutablePath: "",
+  browserExecutablePath: "",
+  browserUserDataDir: "",
   aiTextProvider: "openai_compatible",
   openaiApiBaseUrl: "https://api.openai.com/v1",
   openaiApiKey: "",
@@ -800,6 +802,10 @@ export const getSettings = (): PersistedAppSettings => {
       stored.get("ffmpegExecutablePath") ?? SETTINGS_DEFAULTS.ffmpegExecutablePath,
     ffprobeExecutablePath:
       stored.get("ffprobeExecutablePath") ?? SETTINGS_DEFAULTS.ffprobeExecutablePath,
+    browserExecutablePath:
+      stored.get("browserExecutablePath") ?? SETTINGS_DEFAULTS.browserExecutablePath,
+    browserUserDataDir:
+      stored.get("browserUserDataDir") ?? SETTINGS_DEFAULTS.browserUserDataDir,
     aiTextProvider:
       (stored.get("aiTextProvider") as PersistedAppSettings["aiTextProvider"]) ??
       SETTINGS_DEFAULTS.aiTextProvider,
@@ -871,6 +877,8 @@ export const saveSettings = (settings: PersistedAppSettings) => {
     defaultManagedImport: String(settings.defaultManagedImport),
     ffmpegExecutablePath: settings.ffmpegExecutablePath,
     ffprobeExecutablePath: settings.ffprobeExecutablePath,
+    browserExecutablePath: settings.browserExecutablePath,
+    browserUserDataDir: settings.browserUserDataDir,
     aiTextProvider: settings.aiTextProvider,
     openaiApiBaseUrl: settings.openaiApiBaseUrl,
     openaiApiKey: settings.openaiApiKey,

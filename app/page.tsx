@@ -81,6 +81,8 @@ const defaultSettings: AppSettingsValues = {
   defaultManagedImport: false,
   ffmpegExecutablePath: "",
   ffprobeExecutablePath: "",
+  browserExecutablePath: "",
+  browserUserDataDir: "",
   aiTextProvider: "openai_compatible",
   openaiApiBaseUrl: "https://api.openai.com/v1",
   openaiApiKey: "",
@@ -235,9 +237,38 @@ const joinDesktopPath = (directory: string, filename: string) => {
 type DesktopBridge = {
   chooseExportPath?: (defaultPath: string) => Promise<string | null>;
   chooseDirectory?: (defaultPath: string) => Promise<string | null>;
+  chooseFile?: (
+    defaultPath: string,
+    filters?: Array<{ name: string; extensions: string[] }>
+  ) => Promise<string | null>;
   saveFile?: (targetPath: string, bytes: Uint8Array) => Promise<string>;
   openPath?: (targetPath: string) => Promise<string>;
   exportDiagnostics?: () => Promise<string>;
+  testBrowserCdp?: (input: {
+    executablePath: string;
+    userDataDir: string;
+  }) => Promise<{
+    ok: boolean;
+    endpoint: string | null;
+    browser: string | null;
+    protocolVersion: string | null;
+    webSocketDebuggerUrl: string | null;
+    message: string;
+  }>;
+  launchBrowserCdp?: (input: {
+    executablePath: string;
+    userDataDir: string;
+  }) => Promise<{
+    ok: boolean;
+    endpoint: string | null;
+    browser: string | null;
+    protocolVersion: string | null;
+    webSocketDebuggerUrl: string | null;
+    port: number;
+    executablePath: string;
+    userDataDir: string;
+    message: string;
+  }>;
 };
 
 export default function VideoEditorPage() {
@@ -270,6 +301,16 @@ export default function VideoEditorPage() {
       message: string;
     };
   } | null>(null);
+  const [isTestingBrowserCdp, setIsTestingBrowserCdp] = useState(false);
+  const [browserCdpTestResult, setBrowserCdpTestResult] = useState<{
+    ok: boolean;
+    endpoint: string | null;
+    browser: string | null;
+    protocolVersion: string | null;
+    webSocketDebuggerUrl: string | null;
+    message: string;
+  } | null>(null);
+  const [isLaunchingBrowserCdp, setIsLaunchingBrowserCdp] = useState(false);
   const [isRefreshingAuthorization, setIsRefreshingAuthorization] = useState(false);
   const [isExportingDiagnostics, setIsExportingDiagnostics] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
@@ -1789,6 +1830,10 @@ export default function VideoEditorPage() {
       setMediaToolsCheckResult(null);
     }
 
+    if (field === "browserExecutablePath" || field === "browserUserDataDir") {
+      setBrowserCdpTestResult(null);
+    }
+
     setSettings((previous) => ({ ...previous, [field]: value }));
   };
 
@@ -1856,6 +1901,138 @@ export default function VideoEditorPage() {
       );
     } finally {
       setIsCheckingMediaTools(false);
+    }
+  };
+
+  const handleBrowseBrowserExecutable = () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.chooseFile) {
+      setLibraryError("当前桌面环境未启用文件选择能力。");
+      return;
+    }
+
+    void desktopBridge
+      .chooseFile(settings.browserExecutablePath)
+      .then((selectedPath) => {
+        if (!selectedPath) {
+          return;
+        }
+
+        setSettings((previous) => ({
+          ...previous,
+          browserExecutablePath: selectedPath,
+        }));
+        setBrowserCdpTestResult(null);
+      })
+      .catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "选择浏览器执行文件失败。"
+        );
+      });
+  };
+
+  const handleBrowseBrowserUserDataDirectory = () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.chooseDirectory) {
+      setLibraryError("当前桌面环境未启用目录选择能力。");
+      return;
+    }
+
+    void desktopBridge
+      .chooseDirectory(settings.browserUserDataDir)
+      .then((selectedPath) => {
+        if (!selectedPath) {
+          return;
+        }
+
+        setSettings((previous) => ({
+          ...previous,
+          browserUserDataDir: selectedPath,
+        }));
+        setBrowserCdpTestResult(null);
+      })
+      .catch((error) => {
+        setLibraryError(
+          error instanceof Error ? error.message : "选择浏览器数据目录失败。"
+        );
+      });
+  };
+
+  const handleTestBrowserCdp = async () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.testBrowserCdp) {
+      setLibraryError("当前桌面环境未启用浏览器 CDP 测试能力。");
+      return;
+    }
+
+    setLibraryError(null);
+    setIsTestingBrowserCdp(true);
+
+    try {
+      const result = await desktopBridge.testBrowserCdp({
+        executablePath: settings.browserExecutablePath,
+        userDataDir: settings.browserUserDataDir,
+      });
+      setBrowserCdpTestResult(result);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "浏览器 CDP 测试失败。";
+      setBrowserCdpTestResult({
+        ok: false,
+        endpoint: null,
+        browser: null,
+        protocolVersion: null,
+        webSocketDebuggerUrl: null,
+        message,
+      });
+      setLibraryError(message);
+    } finally {
+      setIsTestingBrowserCdp(false);
+    }
+  };
+
+  const handleLaunchBrowserCdp = async () => {
+    const desktopBridge = (
+      window as typeof window & { metaPlayerDesktop?: DesktopBridge }
+    ).metaPlayerDesktop;
+
+    if (!desktopBridge?.launchBrowserCdp) {
+      setLibraryError("当前桌面环境未启用浏览器 CDP 启动能力。");
+      return;
+    }
+
+    setLibraryError(null);
+    setIsLaunchingBrowserCdp(true);
+
+    try {
+      const result = await desktopBridge.launchBrowserCdp({
+        executablePath: settings.browserExecutablePath,
+        userDataDir: settings.browserUserDataDir,
+      });
+      setBrowserCdpTestResult(result);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "启动浏览器失败。";
+      setBrowserCdpTestResult({
+        ok: false,
+        endpoint: null,
+        browser: null,
+        protocolVersion: null,
+        webSocketDebuggerUrl: null,
+        message,
+      });
+      setLibraryError(message);
+    } finally {
+      setIsLaunchingBrowserCdp(false);
     }
   };
 
@@ -2247,10 +2424,17 @@ export default function VideoEditorPage() {
           isSaving={isSavingSettings}
           isCheckingMediaTools={isCheckingMediaTools}
           mediaToolsCheckResult={mediaToolsCheckResult}
+          isTestingBrowserCdp={isTestingBrowserCdp}
+          browserCdpTestResult={browserCdpTestResult}
+          isLaunchingBrowserCdp={isLaunchingBrowserCdp}
           onChangeField={handleSettingsFieldChange}
           onSave={handleSaveSettings}
           onCheckMediaTools={handleCheckMediaTools}
           onBrowseMaterialDirectory={handleBrowseMaterialDirectory}
+          onBrowseBrowserExecutable={handleBrowseBrowserExecutable}
+          onBrowseBrowserUserDataDirectory={handleBrowseBrowserUserDataDirectory}
+          onTestBrowserCdp={handleTestBrowserCdp}
+          onLaunchBrowserCdp={handleLaunchBrowserCdp}
         />
       ) : activeMenu === "user" ? (
         <UserPanel

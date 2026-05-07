@@ -31,6 +31,10 @@ const putHandler = async (request: Request) => {
           body.ffmpegExecutablePath ?? current.ffmpegExecutablePath,
         ffprobeExecutablePath:
           body.ffprobeExecutablePath ?? current.ffprobeExecutablePath,
+        browserExecutablePath:
+          body.browserExecutablePath ?? current.browserExecutablePath,
+        browserUserDataDir:
+          body.browserUserDataDir ?? current.browserUserDataDir,
         aiTextProvider: body.aiTextProvider ?? current.aiTextProvider,
         openaiApiBaseUrl:
           body.openaiApiBaseUrl ??

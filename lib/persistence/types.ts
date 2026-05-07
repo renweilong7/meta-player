@@ -76,6 +76,8 @@ export interface PersistedAppSettings {
   defaultManagedImport: boolean;
   ffmpegExecutablePath: string;
   ffprobeExecutablePath: string;
+  browserExecutablePath: string;
+  browserUserDataDir: string;
   aiTextProvider: TextAiProvider;
   openaiApiBaseUrl: string;
   openaiApiKey: string;

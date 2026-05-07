@@ -12,6 +12,7 @@ import {
   Sparkles,
   RefreshCw,
   Clapperboard,
+  Globe,
 } from "lucide-react";
 import {
   Card,
@@ -52,6 +53,8 @@ export interface AppSettingsValues {
   defaultManagedImport: boolean;
   ffmpegExecutablePath: string;
   ffprobeExecutablePath: string;
+  browserExecutablePath: string;
+  browserUserDataDir: string;
   aiTextProvider: TextAiProvider;
   openaiApiBaseUrl: string;
   openaiApiKey: string;
@@ -95,6 +98,15 @@ interface SettingsPanelProps {
       message: string;
     };
   } | null;
+  isTestingBrowserCdp?: boolean;
+  browserCdpTestResult?: {
+    ok: boolean;
+    endpoint: string | null;
+    browser: string | null;
+    protocolVersion: string | null;
+    webSocketDebuggerUrl: string | null;
+    message: string;
+  } | null;
   onChangeField: (
     field: keyof AppSettingsValues,
     value: string | boolean
@@ -102,6 +114,11 @@ interface SettingsPanelProps {
   onSave: () => void;
   onCheckMediaTools?: () => void;
   onBrowseMaterialDirectory?: () => void;
+  onBrowseBrowserExecutable?: () => void;
+  onBrowseBrowserUserDataDirectory?: () => void;
+  onTestBrowserCdp?: () => void;
+  isLaunchingBrowserCdp?: boolean;
+  onLaunchBrowserCdp?: () => void;
 }
 
 export function SettingsPanel({
@@ -110,10 +127,17 @@ export function SettingsPanel({
   isSaving = false,
   isCheckingMediaTools = false,
   mediaToolsCheckResult = null,
+  isTestingBrowserCdp = false,
+  browserCdpTestResult = null,
   onChangeField,
   onSave,
   onCheckMediaTools,
   onBrowseMaterialDirectory,
+  onBrowseBrowserExecutable,
+  onBrowseBrowserUserDataDirectory,
+  onTestBrowserCdp,
+  isLaunchingBrowserCdp = false,
+  onLaunchBrowserCdp,
 }: SettingsPanelProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [showVisionApiKey, setShowVisionApiKey] = useState(false);
@@ -123,6 +147,8 @@ export function SettingsPanel({
     defaultManagedImport: values.defaultManagedImport ?? false,
     ffmpegExecutablePath: values.ffmpegExecutablePath ?? "",
     ffprobeExecutablePath: values.ffprobeExecutablePath ?? "",
+    browserExecutablePath: values.browserExecutablePath ?? "",
+    browserUserDataDir: values.browserUserDataDir ?? "",
     aiTextProvider: values.aiTextProvider ?? "openai_compatible",
     openaiApiBaseUrl: values.openaiApiBaseUrl ?? "",
     openaiApiKey: values.openaiApiKey ?? "",
@@ -297,6 +323,155 @@ export function SettingsPanel({
                     </FieldDescription>
                   </FieldContent>
                 </Field>
+              </FieldGroup>
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0">
+            <CardHeader className="border-b border-border">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Globe className="h-4 w-4 text-primary" />
+                浏览器管理
+              </CardTitle>
+              <CardDescription>
+                配置通过 CDP 启动浏览器所需的执行路径与独立用户目录，并在桌面端直接测试连接是否成功。
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="browser-executable-path">
+                    浏览器执行路径
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="flex flex-col gap-3 md:flex-row">
+                      <Input
+                        id="browser-executable-path"
+                        value={normalizedValues.browserExecutablePath}
+                        onChange={(event) =>
+                          onChangeField("browserExecutablePath", event.target.value)
+                        }
+                        placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+                        className="h-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="md:w-auto"
+                        onClick={onBrowseBrowserExecutable}
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                        选择文件
+                      </Button>
+                    </div>
+                    <FieldDescription>
+                      请填写浏览器可执行文件本体路径，而不是快捷方式。推荐为 Chrome、Chromium 或 Edge 的实际二进制路径。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <Field>
+                  <FieldLabel htmlFor="browser-user-data-dir">
+                    user-data-dir
+                  </FieldLabel>
+                  <FieldContent>
+                    <div className="flex flex-col gap-3 md:flex-row">
+                      <Input
+                        id="browser-user-data-dir"
+                        value={normalizedValues.browserUserDataDir}
+                        onChange={(event) =>
+                          onChangeField("browserUserDataDir", event.target.value)
+                        }
+                        placeholder="/Users/renyi/.meta-player/browser-profile"
+                        className="h-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="md:w-auto"
+                        onClick={onBrowseBrowserUserDataDirectory}
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                        选择目录
+                      </Button>
+                    </div>
+                    <FieldDescription>
+                      建议使用独立目录，避免污染日常浏览器配置，也方便后续复用登录态和扩展环境。
+                    </FieldDescription>
+                  </FieldContent>
+                </Field>
+
+                <div className="flex flex-col gap-3 rounded-lg border border-border/70 p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-foreground">CDP 连接测试</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        使用当前配置启动浏览器，并检测本地 DevTools Protocol 是否成功暴露。
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={onTestBrowserCdp}
+                      disabled={isTestingBrowserCdp}
+                    >
+                      <RefreshCw
+                        className={isTestingBrowserCdp ? "h-4 w-4 animate-spin" : "h-4 w-4"}
+                      />
+                      {isTestingBrowserCdp ? "测试中..." : "测试 CDP 启动"}
+                    </Button>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      onClick={onLaunchBrowserCdp}
+                      disabled={isLaunchingBrowserCdp}
+                    >
+                      <Globe
+                        className={isLaunchingBrowserCdp ? "h-4 w-4 animate-pulse" : "h-4 w-4"}
+                      />
+                      {isLaunchingBrowserCdp ? "启动中..." : "启动浏览器"}
+                    </Button>
+                  </div>
+
+                  {browserCdpTestResult ? (
+                    <div
+                      className={
+                        browserCdpTestResult.ok
+                          ? "rounded-lg border border-emerald-200 bg-emerald-50/80 p-3"
+                          : "rounded-lg border border-red-200 bg-red-50/80 p-3"
+                      }
+                    >
+                      <p className="text-sm font-medium text-foreground">
+                        {browserCdpTestResult.ok ? "CDP 连接成功" : "CDP 连接失败"}
+                      </p>
+                      <p className="mt-2 text-sm text-foreground">
+                        {browserCdpTestResult.message}
+                      </p>
+                      {browserCdpTestResult.browser ? (
+                        <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+                          浏览器：{browserCdpTestResult.browser}
+                        </p>
+                      ) : null}
+                      {browserCdpTestResult.protocolVersion ? (
+                        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                          Protocol-Version：{browserCdpTestResult.protocolVersion}
+                        </p>
+                      ) : null}
+                      {browserCdpTestResult.endpoint ? (
+                        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                          Endpoint：{browserCdpTestResult.endpoint}
+                        </p>
+                      ) : null}
+                      {browserCdpTestResult.webSocketDebuggerUrl ? (
+                        <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+                          WebSocket：{browserCdpTestResult.webSocketDebuggerUrl}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
               </FieldGroup>
             </CardContent>
           </Card>
